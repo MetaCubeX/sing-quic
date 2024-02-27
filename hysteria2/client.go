@@ -111,11 +111,9 @@ func (c *Client) hopLoop() {
 	ticker := time.NewTicker(c.hopInterval)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-ticker.C:
-			if c.hop() {
-				return
-			}
+		<-ticker.C
+		if c.hop() {
+			return
 		}
 	}
 }
@@ -126,7 +124,7 @@ func (c *Client) hop() bool {
 	c.serverAddrIndex = rand.Intn(len(c.serverAddrs))
 	c.serverAddr = c.serverAddrs[c.serverAddrIndex]
 	if c.conn != nil && c.conn.active() {
-		c.conn.rawConn.(bufio.BindPacketConn).HopTo(c.serverAddr.UDPAddr())
+		c.conn.rawConn.(bufio.BindHoppingPacketConn).HopTo(c.serverAddr.UDPAddr())
 		c.logger.Info("Hopped to ", c.serverAddr)
 		return false
 	}
@@ -157,7 +155,11 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	if err != nil {
 		return nil, err
 	}
-	packetConn = bufio.NewBindPacketConn(packetConn, c.serverAddr.UDPAddr())
+	if len(c.serverAddrs) > 0 {
+		packetConn = bufio.NewBindHoppingPacketConn(packetConn, c.serverAddr.UDPAddr())
+	} else {
+		packetConn = bufio.NewBindPacketConn(packetConn, c.serverAddr.UDPAddr())
+	}
 	if c.salamanderPassword != "" {
 		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
 	}
