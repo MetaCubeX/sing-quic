@@ -1,9 +1,10 @@
-module github.com/metacubex/sing-quic
+module github.com/sqkam/sing-quic
 
 go 1.20
 
 require (
 	github.com/metacubex/quic-go v0.41.1-0.20240120014142-a02f4a533d4a
+	github.com/metacubex/sing-quic v0.0.0-20240130040922-cbe613c88f20
 	github.com/sagernet/sing v0.3.0
 	golang.org/x/crypto v0.18.0
 )

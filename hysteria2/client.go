@@ -3,14 +3,6 @@ package hysteria2
 import (
 	"context"
 	"crypto/tls"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"runtime"
-	"sync"
-
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
 	"github.com/metacubex/sing-quic"
@@ -22,7 +14,17 @@ import (
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"runtime"
+	"sync"
+	"time"
 )
+
+const minHopInterval = 20000
 
 type ClientOptions struct {
 	Context            context.Context
@@ -38,6 +40,8 @@ type ClientOptions struct {
 	UDPDisabled        bool
 	CWND               int
 	UdpMTU             int
+	Ports              []int64
+	HopInterval        int64
 }
 
 type Client struct {
@@ -55,12 +59,20 @@ type Client struct {
 	udpDisabled        bool
 	cwnd               int
 	udpMTU             int
+	hasNewConn         chan struct{}
+	updateConnAt       int64
+	Ports              []int64
+	hopInterval        int64
 
 	connAccess sync.RWMutex
 	conn       *clientQUICConnection
+	nconn      *clientQUICConnection
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
+	if options.HopInterval < minHopInterval {
+		options.HopInterval = minHopInterval
+	}
 	quicConfig := &quic.Config{
 		DisablePathMTUDiscovery:        !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
 		EnableDatagrams:                !options.UDPDisabled,
@@ -89,7 +101,96 @@ func NewClient(options ClientOptions) (*Client, error) {
 		udpDisabled:        options.UDPDisabled,
 		cwnd:               options.CWND,
 		udpMTU:             options.UdpMTU,
+		Ports:              options.Ports,
+		hopInterval:        options.HopInterval,
+		hasNewConn:         make(chan struct{}),
+		updateConnAt:       time.Now().UnixMilli(),
 	}, nil
+}
+
+func (c *Client) offerAndHop(ctx context.Context) (*clientQUICConnection, error) {
+	if time.Now().UnixMilli()-c.updateConnAt > c.hopInterval {
+		c.updateConnAt = time.Now().UnixMilli()
+		go func(c *Client) {
+			randPort := uint16(c.Ports[time.Now().UnixMilli()%(int64(len(c.Ports)))])
+			c.serverAddr = M.ParseSocksaddrHostPort(c.serverAddr.Fqdn, randPort)
+			c.nconn, _ = c.getNew(c.ctx)
+			c.hasNewConn <- struct{}{}
+			c.logger.Debug("[UDP] connect to new port suc,port: ", randPort)
+		}(c)
+	}
+	select {
+	case <-c.hasNewConn:
+		c.conn = c.nconn
+		go c.loopMessages(c.conn)
+	default:
+	}
+	return c.offer(ctx)
+
+}
+
+func (c *Client) getNew(ctx context.Context) (*clientQUICConnection, error) {
+	udpConn, err := c.dialer.DialContext(c.ctx, "udp", c.serverAddr)
+	if err != nil {
+		return nil, err
+	}
+	var packetConn net.PacketConn
+	packetConn = bufio.NewUnbindPacketConn(udpConn)
+	if c.salamanderPassword != "" {
+		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
+	}
+	var quicConn quic.EarlyConnection
+	http3Transport, err := qtls.CreateTransport(packetConn, &quicConn, c.serverAddr, c.tlsConfig, c.quicConfig, true)
+	if err != nil {
+		udpConn.Close()
+		return nil, err
+	}
+	request := &http.Request{
+		Method: http.MethodPost,
+		URL: &url.URL{
+			Scheme: "https",
+			Host:   protocol.URLHost,
+			Path:   protocol.URLPath,
+		},
+		Header: make(http.Header),
+	}
+	protocol.AuthRequestToHeader(request.Header, protocol.AuthRequest{Auth: c.password, Rx: c.receiveBPS})
+	response, err := http3Transport.RoundTrip(request.WithContext(ctx))
+	if err != nil {
+		if quicConn != nil {
+			quicConn.CloseWithError(0, "")
+		}
+		udpConn.Close()
+		return nil, err
+	}
+	if response.StatusCode != protocol.StatusAuthOK {
+		if quicConn != nil {
+			quicConn.CloseWithError(0, "")
+		}
+		udpConn.Close()
+		return nil, E.New("authentication failed, status code: ", response.StatusCode)
+	}
+	response.Body.Close()
+	authResponse := protocol.AuthResponseFromHeader(response.Header)
+	actualTx := authResponse.Rx
+	if actualTx == 0 || actualTx > c.sendBPS {
+		actualTx = c.sendBPS
+	}
+	if !authResponse.RxAuto && actualTx > 0 {
+		quicConn.SetCongestionControl(hyCC.NewBrutalSender(actualTx, c.brutalDebug, c.logger))
+	} else {
+		SetCongestionController(quicConn, "bbr", c.cwnd)
+	}
+	conn := &clientQUICConnection{
+		quicConn:    quicConn,
+		rawConn:     udpConn,
+		connDone:    make(chan struct{}),
+		udpDisabled: !authResponse.UDPEnabled,
+		udpConnMap:  make(map[uint32]*udpPacketConn),
+	}
+	if !c.udpDisabled {
+	}
+	return conn, nil
 }
 
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
@@ -177,7 +278,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) DialConn(ctx context.Context, destination M.Socksaddr) (net.Conn, error) {
-	conn, err := c.offer(ctx)
+	conn, err := c.offerAndHop(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +296,7 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	if c.udpDisabled {
 		return nil, os.ErrInvalid
 	}
-	conn, err := c.offer(ctx)
+	conn, err := c.offerAndHop(ctx)
 	if err != nil {
 		return nil, err
 	}
