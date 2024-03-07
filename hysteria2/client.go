@@ -19,7 +19,6 @@ import (
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
 	"github.com/sagernet/sing/common/baderror"
-	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
@@ -121,7 +120,7 @@ func (c *Client) hop() bool {
 	c.serverAddrIndex = rand.Intn(len(c.serverAddrs))
 	c.serverAddr = c.serverAddrs[c.serverAddrIndex]
 	if c.conn != nil && c.conn.active() {
-		c.conn.rawConn.(bufio.BindHoppingPacketConn).HopTo(c.serverAddr.UDPAddr())
+		c.conn.quicConn.SetRemoteAddr(c.serverAddr.UDPAddr())
 		c.logger.Info("Hopped to ", c.serverAddr)
 		return false
 	}
@@ -151,11 +150,6 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	packetConn, err := c.dialer.ListenPacket(ctx, c.serverAddr)
 	if err != nil {
 		return nil, err
-	}
-	if len(c.serverAddrs) > 0 {
-		packetConn = bufio.NewBindHoppingPacketConn(packetConn, c.serverAddr.UDPAddr())
-	} else {
-		packetConn = bufio.NewBindPacketConn(packetConn, c.serverAddr.UDPAddr())
 	}
 	if c.salamanderPassword != "" {
 		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
