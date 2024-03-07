@@ -101,9 +101,6 @@ func NewClient(options ClientOptions) (*Client, error) {
 		cwnd:               options.CWND,
 		udpMTU:             options.UdpMTU,
 	}
-	if len(options.ServerAddresses) > 0 {
-		go client.hopLoop()
-	}
 	return client, nil
 }
 
@@ -216,6 +213,9 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 		go c.loopMessages(conn)
 	}
 	c.conn = conn
+	if len(c.serverAddrs) > 0 {
+		go c.hopLoop()
+	}
 	return conn, nil
 }
 
