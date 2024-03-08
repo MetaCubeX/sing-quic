@@ -103,36 +103,28 @@ func NewClient(options ClientOptions) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) hopLoop() {
+func (c *Client) hopLoop(conn *clientQUICConnection) {
 	ticker := time.NewTicker(c.hopInterval)
 	defer ticker.Stop()
 	c.logger.Info("Entering hop loop ...")
 	for {
 		select {
 		case <-ticker.C:
-			if c.hop() {
-				continue
-			}
+			// Accessing the `serverAddr` without a lock is safe here because:
+			// * Other goroutines will eventually obtain the updated value
+			// * The packets send to the previous `serverAddr` is acceptable
+			c.serverAddrIndex = rand.Intn(len(c.serverAddrs))
+			c.serverAddr = c.serverAddrs[c.serverAddrIndex]
+			conn.quicConn.SetRemoteAddr(c.serverAddr.UDPAddr())
+			c.logger.Info("Hopped to ", c.serverAddr)
+			continue
 		case <-c.ctx.Done():
-		case <-c.conn.quicConn.Context().Done():
-		case <-c.conn.connDone:
+		case <-conn.quicConn.Context().Done():
+		case <-conn.connDone:
 		}
 		c.logger.Info("Exiting hop loop ...")
 		return
 	}
-}
-
-func (c *Client) hop() bool {
-	c.connAccess.Lock()
-	defer c.connAccess.Unlock()
-	c.serverAddrIndex = rand.Intn(len(c.serverAddrs))
-	c.serverAddr = c.serverAddrs[c.serverAddrIndex]
-	if c.conn != nil && c.conn.active() {
-		c.conn.quicConn.SetRemoteAddr(c.serverAddr.UDPAddr())
-		c.logger.Info("Hopped to ", c.serverAddr)
-		return true
-	}
-	return false
 }
 
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
@@ -215,7 +207,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	}
 	c.conn = conn
 	if len(c.serverAddrs) > 0 {
-		go c.hopLoop()
+		go c.hopLoop(conn)
 	}
 	return conn, nil
 }
