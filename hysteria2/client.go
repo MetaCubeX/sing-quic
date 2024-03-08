@@ -106,11 +106,19 @@ func NewClient(options ClientOptions) (*Client, error) {
 func (c *Client) hopLoop() {
 	ticker := time.NewTicker(c.hopInterval)
 	defer ticker.Stop()
+	c.logger.Info("Entering hop loop ...")
 	for {
-		<-ticker.C
-		if c.hop() {
-			return
+		select {
+		case <-ticker.C:
+			if c.hop() {
+				continue
+			}
+		case <-c.ctx.Done():
+		case <-c.conn.quicConn.Context().Done():
+		case <-c.conn.connDone:
 		}
+		c.logger.Info("Exiting hop loop ...")
+		return
 	}
 }
 
@@ -122,10 +130,9 @@ func (c *Client) hop() bool {
 	if c.conn != nil && c.conn.active() {
 		c.conn.quicConn.SetRemoteAddr(c.serverAddr.UDPAddr())
 		c.logger.Info("Hopped to ", c.serverAddr)
-		return false
+		return true
 	}
-	c.logger.Info("Exiting hop loop ...")
-	return true
+	return false
 }
 
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
