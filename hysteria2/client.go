@@ -11,7 +11,6 @@ import (
 	"os"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/quic-go"
@@ -19,6 +18,7 @@ import (
 	qtls "github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
+	"github.com/sagernet/sing/common/atomic"
 	"github.com/sagernet/sing/common/baderror"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
@@ -49,7 +49,7 @@ type Client struct {
 	dialer             N.Dialer
 	logger             logger.Logger
 	brutalDebug        bool
-	serverAddr         atomic.Value // M.Socksaddr
+	serverAddr         atomic.TypedValue[M.Socksaddr]
 	serverAddrs        []M.Socksaddr
 	hopInterval        time.Duration
 	sendBPS            uint64
@@ -141,7 +141,7 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
-	serverAddr := c.serverAddr.Load().(M.Socksaddr)
+	serverAddr := c.serverAddr.Load()
 	packetConn, err := c.dialer.ListenPacket(ctx, serverAddr)
 	if err != nil {
 		return nil, err
