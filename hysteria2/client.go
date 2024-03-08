@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/quic-go"
@@ -32,7 +33,6 @@ type ClientOptions struct {
 	BrutalDebug        bool
 	ServerAddress      M.Socksaddr
 	ServerAddresses    []M.Socksaddr
-	ServerAddressIndex int
 	HopInterval        time.Duration
 	SendBPS            uint64
 	ReceiveBPS         uint64
@@ -49,7 +49,7 @@ type Client struct {
 	dialer             N.Dialer
 	logger             logger.Logger
 	brutalDebug        bool
-	serverAddr         M.Socksaddr
+	serverAddr         atomic.Value // M.Socksaddr
 	serverAddrs        []M.Socksaddr
 	hopInterval        time.Duration
 	sendBPS            uint64
@@ -85,7 +85,6 @@ func NewClient(options ClientOptions) (*Client, error) {
 		dialer:             options.Dialer,
 		logger:             options.Logger,
 		brutalDebug:        options.BrutalDebug,
-		serverAddr:         options.ServerAddress,
 		serverAddrs:        options.ServerAddresses,
 		hopInterval:        options.HopInterval,
 		sendBPS:            options.SendBPS,
@@ -98,6 +97,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		cwnd:               options.CWND,
 		udpMTU:             options.UdpMTU,
 	}
+	client.serverAddr.Store(options.ServerAddress)
 	return client, nil
 }
 
@@ -108,12 +108,10 @@ func (c *Client) hopLoop(conn *clientQUICConnection) {
 	for {
 		select {
 		case <-ticker.C:
-			// Accessing the `serverAddr` without a lock is safe here because:
-			// * Other goroutines will eventually obtain the updated value
-			// * The packets send to the previous `serverAddr` is acceptable
-			c.serverAddr = c.serverAddrs[rand.Intn(len(c.serverAddrs))]
-			conn.quicConn.SetRemoteAddr(c.serverAddr.UDPAddr())
-			c.logger.Info("Hopped to ", c.serverAddr)
+			serverAddr := c.serverAddrs[rand.Intn(len(c.serverAddrs))]
+			c.serverAddr.Store(serverAddr)
+			conn.quicConn.SetRemoteAddr(serverAddr.UDPAddr())
+			c.logger.Info("Hopped to ", serverAddr)
 			continue
 		case <-c.ctx.Done():
 		case <-conn.quicConn.Context().Done():
@@ -143,7 +141,8 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
-	packetConn, err := c.dialer.ListenPacket(ctx, c.serverAddr)
+	serverAddr := c.serverAddr.Load().(M.Socksaddr)
+	packetConn, err := c.dialer.ListenPacket(ctx, serverAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +150,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
 	}
 	var quicConn quic.EarlyConnection
-	http3Transport, err := qtls.CreateTransport(packetConn, &quicConn, c.serverAddr, c.tlsConfig, c.quicConfig, true)
+	http3Transport, err := qtls.CreateTransport(packetConn, &quicConn, serverAddr, c.tlsConfig, c.quicConfig, true)
 	if err != nil {
 		packetConn.Close()
 		return nil, err
