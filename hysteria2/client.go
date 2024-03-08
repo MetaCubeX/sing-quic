@@ -51,7 +51,6 @@ type Client struct {
 	brutalDebug        bool
 	serverAddr         M.Socksaddr
 	serverAddrs        []M.Socksaddr
-	serverAddrIndex    int
 	hopInterval        time.Duration
 	sendBPS            uint64
 	receiveBPS         uint64
@@ -88,7 +87,6 @@ func NewClient(options ClientOptions) (*Client, error) {
 		brutalDebug:        options.BrutalDebug,
 		serverAddr:         options.ServerAddress,
 		serverAddrs:        options.ServerAddresses,
-		serverAddrIndex:    options.ServerAddressIndex,
 		hopInterval:        options.HopInterval,
 		sendBPS:            options.SendBPS,
 		receiveBPS:         options.ReceiveBPS,
@@ -113,8 +111,7 @@ func (c *Client) hopLoop(conn *clientQUICConnection) {
 			// Accessing the `serverAddr` without a lock is safe here because:
 			// * Other goroutines will eventually obtain the updated value
 			// * The packets send to the previous `serverAddr` is acceptable
-			c.serverAddrIndex = rand.Intn(len(c.serverAddrs))
-			c.serverAddr = c.serverAddrs[c.serverAddrIndex]
+			c.serverAddr = c.serverAddrs[rand.Intn(len(c.serverAddrs))]
 			conn.quicConn.SetRemoteAddr(c.serverAddr.UDPAddr())
 			c.logger.Info("Hopped to ", c.serverAddr)
 			continue
