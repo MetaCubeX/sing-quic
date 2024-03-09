@@ -116,7 +116,7 @@ func (c *Client) offerAndHop(ctx context.Context) (*clientQUICConnection, error)
 			c.serverAddr = M.ParseSocksaddrHostPort(c.serverAddr.Fqdn, randPort)
 			c.nconn, _ = c.getNew(c.ctx)
 			c.hasNewConn <- struct{}{}
-			c.logger.Debug("[UDP] connect to new port suc,port: ", randPort)
+			c.logger.Debug("[UDP] connect to new port suc, port: ", randPort)
 		}(c)
 	}
 	select {
