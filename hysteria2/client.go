@@ -52,6 +52,7 @@ type Client struct {
 	serverAddr         atomic.TypedValue[M.Socksaddr]
 	serverAddrs        []M.Socksaddr
 	hopInterval        time.Duration
+	hopAt              int64
 	sendBPS            uint64
 	receiveBPS         uint64
 	salamanderPassword string
@@ -87,6 +88,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		brutalDebug:        options.BrutalDebug,
 		serverAddrs:        options.ServerAddresses,
 		hopInterval:        options.HopInterval,
+		hopAt:              time.Now().UnixMilli(),
 		sendBPS:            options.SendBPS,
 		receiveBPS:         options.ReceiveBPS,
 		salamanderPassword: options.SalamanderPassword,
@@ -99,27 +101,6 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}
 	client.serverAddr.Store(options.ServerAddress)
 	return client, nil
-}
-
-func (c *Client) hopLoop(conn *clientQUICConnection) {
-	ticker := time.NewTicker(c.hopInterval)
-	defer ticker.Stop()
-	c.logger.Info("Entering hop loop ...")
-	for {
-		select {
-		case <-ticker.C:
-			serverAddr := c.serverAddrs[rand.Intn(len(c.serverAddrs))]
-			c.serverAddr.Store(serverAddr)
-			conn.quicConn.SetRemoteAddr(serverAddr.UDPAddr())
-			c.logger.Info("Hopped to ", serverAddr)
-			continue
-		case <-c.ctx.Done():
-		case <-conn.quicConn.Context().Done():
-		case <-conn.connDone:
-		}
-		c.logger.Info("Exiting hop loop ...")
-		return
-	}
 }
 
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
@@ -202,13 +183,19 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 		go c.loopMessages(conn)
 	}
 	c.conn = conn
-	if len(c.serverAddrs) > 0 {
-		go c.hopLoop(conn)
-	}
+
 	return conn, nil
 }
 
 func (c *Client) DialConn(ctx context.Context, destination M.Socksaddr) (net.Conn, error) {
+	if len(c.serverAddrs) > 0 && time.Now().UnixMilli()-c.hopAt > c.hopInterval.Milliseconds() {
+		serverAddr := c.serverAddrs[rand.Intn(len(c.serverAddrs))]
+		c.serverAddr.Store(serverAddr)
+		c.conn.quicConn.SetRemoteAddr(serverAddr.UDPAddr())
+		c.hopAt = time.Now().UnixMilli()
+		c.logger.Info("Hopped to ", serverAddr)
+	}
+
 	conn, err := c.offer(ctx)
 	if err != nil {
 		return nil, err
@@ -227,6 +214,7 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	if c.udpDisabled {
 		return nil, os.ErrInvalid
 	}
+
 	conn, err := c.offer(ctx)
 	if err != nil {
 		return nil, err
