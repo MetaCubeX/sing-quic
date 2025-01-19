@@ -36,6 +36,7 @@ type ClientOptions struct {
 	SalamanderPassword string
 	Password           string
 	TLSConfig          *tls.Config
+	QUICConfig         *quic.Config
 	UDPDisabled        bool
 	CWND               int
 	UdpMTU             int
@@ -64,15 +65,29 @@ type Client struct {
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
-	quicConfig := &quic.Config{
-		DisablePathMTUDiscovery:        !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
-		EnableDatagrams:                !options.UDPDisabled,
-		InitialStreamReceiveWindow:     DefaultStreamReceiveWindow,
-		MaxStreamReceiveWindow:         DefaultStreamReceiveWindow,
-		InitialConnectionReceiveWindow: DefaultConnReceiveWindow,
-		MaxConnectionReceiveWindow:     DefaultConnReceiveWindow,
-		MaxIdleTimeout:                 DefaultMaxIdleTimeout,
-		KeepAlivePeriod:                DefaultKeepAlivePeriod,
+	quicConfig := &quic.Config{}
+	if options.QUICConfig != nil {
+		quicConfig = options.QUICConfig
+	}
+	quicConfig.DisablePathMTUDiscovery = !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin")
+	quicConfig.EnableDatagrams = !options.UDPDisabled
+	if quicConfig.InitialStreamReceiveWindow == 0 {
+		quicConfig.InitialStreamReceiveWindow = DefaultStreamReceiveWindow
+	}
+	if quicConfig.MaxStreamReceiveWindow == 0 {
+		quicConfig.MaxStreamReceiveWindow = DefaultStreamReceiveWindow
+	}
+	if quicConfig.InitialConnectionReceiveWindow == 0 {
+		quicConfig.InitialConnectionReceiveWindow = DefaultConnReceiveWindow
+	}
+	if quicConfig.MaxConnectionReceiveWindow == 0 {
+		quicConfig.MaxConnectionReceiveWindow = DefaultConnReceiveWindow
+	}
+	if quicConfig.MaxIdleTimeout == 0 {
+		quicConfig.MaxIdleTimeout = DefaultMaxIdleTimeout
+	}
+	if quicConfig.KeepAlivePeriod == 0 {
+		quicConfig.KeepAlivePeriod = DefaultKeepAlivePeriod
 	}
 	if len(options.TLSConfig.NextProtos) == 0 {
 		options.TLSConfig.NextProtos = []string{http3.NextProtoH3}

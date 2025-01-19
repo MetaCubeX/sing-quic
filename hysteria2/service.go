@@ -35,6 +35,7 @@ type ServiceOptions struct {
 	IgnoreClientBandwidth bool
 	SalamanderPassword    string
 	TLSConfig             *tls.Config
+	QUICConfig            *quic.Config
 	UDPDisabled           bool
 	UDPTimeout            time.Duration
 	Handler               ServerHandler
@@ -69,16 +70,32 @@ type Service[U comparable] struct {
 }
 
 func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
-	quicConfig := &quic.Config{
-		DisablePathMTUDiscovery:        !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
-		EnableDatagrams:                !options.UDPDisabled,
-		MaxIncomingStreams:             1 << 60,
-		InitialStreamReceiveWindow:     DefaultStreamReceiveWindow,
-		MaxStreamReceiveWindow:         DefaultStreamReceiveWindow,
-		InitialConnectionReceiveWindow: DefaultConnReceiveWindow,
-		MaxConnectionReceiveWindow:     DefaultConnReceiveWindow,
-		MaxIdleTimeout:                 DefaultMaxIdleTimeout,
-		KeepAlivePeriod:                DefaultKeepAlivePeriod,
+	quicConfig := &quic.Config{}
+	if options.QUICConfig != nil {
+		quicConfig = options.QUICConfig
+	}
+	quicConfig.DisablePathMTUDiscovery = !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin")
+	quicConfig.EnableDatagrams = !options.UDPDisabled
+	if quicConfig.MaxIncomingStreams == 0 {
+		quicConfig.MaxIncomingStreams = 1 << 60
+	}
+	if quicConfig.InitialStreamReceiveWindow == 0 {
+		quicConfig.InitialStreamReceiveWindow = DefaultStreamReceiveWindow
+	}
+	if quicConfig.MaxStreamReceiveWindow == 0 {
+		quicConfig.MaxStreamReceiveWindow = DefaultStreamReceiveWindow
+	}
+	if quicConfig.InitialConnectionReceiveWindow == 0 {
+		quicConfig.InitialConnectionReceiveWindow = DefaultConnReceiveWindow
+	}
+	if quicConfig.MaxConnectionReceiveWindow == 0 {
+		quicConfig.MaxConnectionReceiveWindow = DefaultConnReceiveWindow
+	}
+	if quicConfig.MaxIdleTimeout == 0 {
+		quicConfig.MaxIdleTimeout = DefaultMaxIdleTimeout
+	}
+	if quicConfig.KeepAlivePeriod == 0 {
+		quicConfig.KeepAlivePeriod = DefaultKeepAlivePeriod
 	}
 	if options.MasqueradeHandler == nil {
 		options.MasqueradeHandler = http.NotFoundHandler()
