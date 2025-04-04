@@ -193,6 +193,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 		packetConn.Close()
 		return nil, err
 	}
+	response.Body.Close()
 	if response.StatusCode != protocol.StatusAuthOK {
 		if quicConn != nil {
 			quicConn.CloseWithError(0, "")
@@ -200,7 +201,6 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 		packetConn.Close()
 		return nil, E.New("authentication failed, status code: ", response.StatusCode)
 	}
-	response.Body.Close()
 	authResponse := protocol.AuthResponseFromHeader(response.Header)
 	actualTx := authResponse.Rx
 	if actualTx == 0 || actualTx > c.sendBPS {
