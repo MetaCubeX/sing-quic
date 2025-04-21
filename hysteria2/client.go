@@ -2,7 +2,6 @@ package hysteria2
 
 import (
 	"context"
-	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +10,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	tls "github.com/metacubex/utls"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"

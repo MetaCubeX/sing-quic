@@ -2,9 +2,10 @@ package qtls
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"net/http"
+
+	tls "github.com/metacubex/utls"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
