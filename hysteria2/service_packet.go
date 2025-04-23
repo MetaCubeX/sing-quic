@@ -50,7 +50,7 @@ func (s *serverSession[U]) handleUDPMessage(message *udpMessage) {
 		s.udpAccess.Unlock()
 		newCtx, newConn := canceler.NewPacketConn(udpConn.ctx, udpConn, s.udpTimeout)
 		go s.handler.NewPacketConnection(newCtx, newConn, M.Metadata{
-			Source:      s.source,
+			Source:      M.SocksaddrFromNet(s.quicConn.RemoteAddr()),
 			Destination: M.ParseSocksaddr(message.destination),
 		})
 	}
