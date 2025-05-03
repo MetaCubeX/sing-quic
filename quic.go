@@ -9,7 +9,7 @@ import (
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
-	M "github.com/sagernet/sing/common/metadata"
+	M "github.com/metacubex/sing/common/metadata"
 )
 
 type Config interface {

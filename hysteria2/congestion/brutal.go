@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/metacubex/quic-go/congestion"
-	"github.com/sagernet/sing/common/logger"
+	"github.com/metacubex/sing/common/logger"
 )
 
 const (

@@ -15,12 +15,12 @@ import (
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/quicvarint"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
-	"github.com/sagernet/sing/common"
-	"github.com/sagernet/sing/common/atomic"
-	"github.com/sagernet/sing/common/buf"
-	"github.com/sagernet/sing/common/cache"
-	M "github.com/sagernet/sing/common/metadata"
-	N "github.com/sagernet/sing/common/network"
+	"github.com/metacubex/sing/common"
+	"github.com/metacubex/sing/common/atomic"
+	"github.com/metacubex/sing/common/buf"
+	"github.com/metacubex/sing/common/cache"
+	M "github.com/metacubex/sing/common/metadata"
+	N "github.com/metacubex/sing/common/network"
 )
 
 var udpMessagePool = sync.Pool{

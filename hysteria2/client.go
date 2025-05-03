@@ -18,11 +18,11 @@ import (
 	qtls "github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
-	"github.com/sagernet/sing/common/baderror"
-	E "github.com/sagernet/sing/common/exceptions"
-	"github.com/sagernet/sing/common/logger"
-	M "github.com/sagernet/sing/common/metadata"
-	N "github.com/sagernet/sing/common/network"
+	"github.com/metacubex/sing/common/baderror"
+	E "github.com/metacubex/sing/common/exceptions"
+	"github.com/metacubex/sing/common/logger"
+	M "github.com/metacubex/sing/common/metadata"
+	N "github.com/metacubex/sing/common/network"
 )
 
 type ClientOptions struct {
