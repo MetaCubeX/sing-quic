@@ -3,7 +3,7 @@ module github.com/metacubex/sing-quic
 go 1.20
 
 require (
-	github.com/metacubex/quic-go v0.51.1-0.20250421134811-7b4054ad1c06
+	github.com/metacubex/quic-go v0.51.1-0.20250511032541-4e34341cf18b
 	github.com/metacubex/sing v0.5.2
 	github.com/metacubex/utls v1.7.0-alpha.1
 	golang.org/x/crypto v0.33.0

@@ -75,6 +75,7 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 	if options.QUICConfig != nil {
 		quicConfig = options.QUICConfig
 	}
+	quicConfig.DisablePathManager = true // for port hopping
 	quicConfig.DisablePathMTUDiscovery = !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin")
 	quicConfig.EnableDatagrams = !options.UDPDisabled
 	if quicConfig.MaxIncomingStreams == 0 {
