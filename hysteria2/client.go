@@ -15,7 +15,6 @@ import (
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
-	qtls "github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
 	"github.com/metacubex/sing/common/baderror"
@@ -171,10 +170,16 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
 	}
 	var quicConn quic.EarlyConnection
-	http3Transport, err := qtls.CreateTransport(packetConn, &quicConn, serverAddr, c.tlsConfig, c.quicConfig)
-	if err != nil {
-		packetConn.Close()
-		return nil, err
+	http3Transport := &http3.Transport{
+		TLSClientConfig: c.tlsConfig,
+		QUICConfig:      c.quicConfig,
+		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+			quicConn, err = quic.DialEarly(ctx, packetConn, serverAddr, tlsCfg, cfg)
+			if err != nil {
+				return nil, err
+			}
+			return quicConn, nil
+		},
 	}
 	request := &http.Request{
 		Method: http.MethodPost,
