@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metacubex/randv2"
 	tls "github.com/metacubex/utls"
 
 	"github.com/metacubex/quic-go"
@@ -30,6 +31,7 @@ type ClientOptions struct {
 	Logger             logger.Logger
 	BrutalDebug        bool
 	ServerAddress      func(ctx context.Context) (*net.UDPAddr, error)
+	ServerPorts        []uint16
 	HopInterval        time.Duration
 	SendBPS            uint64
 	ReceiveBPS         uint64
@@ -48,6 +50,7 @@ type Client struct {
 	logger             logger.Logger
 	brutalDebug        bool
 	serverAddress      func(ctx context.Context) (*net.UDPAddr, error)
+	serverPorts        []uint16
 	hopInterval        time.Duration
 	sendBPS            uint64
 	receiveBPS         uint64
@@ -98,6 +101,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		logger:             options.Logger,
 		brutalDebug:        options.BrutalDebug,
 		serverAddress:      options.ServerAddress,
+		serverPorts:        options.ServerPorts,
 		hopInterval:        options.HopInterval,
 		sendBPS:            options.SendBPS,
 		receiveBPS:         options.ReceiveBPS,
@@ -119,15 +123,8 @@ func (c *Client) hopLoop(conn *clientQUICConnection, remoteAddr *net.UDPAddr) {
 	for {
 		select {
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), c.hopInterval)
-			serverAddr, err := c.serverAddress(ctx)
-			cancel()
-			if err != nil {
-				c.logger.Warn("Hop loop fetch serverAddress error: '%s', ignored", err)
-				break
-			}
-			targetAddr := *remoteAddr         // make a copy
-			targetAddr.Port = serverAddr.Port // only change port
+			targetAddr := *remoteAddr                                             // make a copy
+			targetAddr.Port = int(c.serverPorts[randv2.IntN(len(c.serverPorts))]) // only change port
 			conn.quicConn.SetRemoteAddr(&targetAddr)
 			c.logger.Debug("Hopped to ", &targetAddr)
 			continue
