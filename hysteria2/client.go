@@ -159,6 +159,9 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(c.serverPorts) > 0 { // randomize select a port from serverPorts
+		serverAddr.Port = int(c.serverPorts[randv2.IntN(len(c.serverPorts))])
+	}
 	packetConn, err := c.dialer.ListenPacket(ctx, M.SocksaddrFromNet(serverAddr))
 	if err != nil {
 		return nil, err
