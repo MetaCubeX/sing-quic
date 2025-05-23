@@ -9,13 +9,12 @@ import (
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
-	M "github.com/metacubex/sing/common/metadata"
 )
 
 type Config interface {
 	Dial(ctx context.Context, conn net.PacketConn, addr net.Addr, config *quic.Config) (quic.Connection, error)
 	DialEarly(ctx context.Context, conn net.PacketConn, addr net.Addr, config *quic.Config) (quic.EarlyConnection, error)
-	CreateTransport(conn net.PacketConn, quicConnPtr *quic.EarlyConnection, serverAddr M.Socksaddr, quicConfig *quic.Config) http.RoundTripper
+	CreateTransport(conn net.PacketConn, quicConnPtr *quic.EarlyConnection, serverAddr *net.UDPAddr, quicConfig *quic.Config) http.RoundTripper
 }
 
 type ServerConfig interface {
@@ -45,7 +44,7 @@ func DialEarly(ctx context.Context, conn net.PacketConn, addr net.Addr, tlsConfi
 }
 
 func CreateTransport(conn net.PacketConn, quicConnPtr *quic.EarlyConnection, serverAddr *net.UDPAddr, tlsConfig *tls.Config, quicConfig *quic.Config) (http.RoundTripper, error) {
-	return &http3.RoundTripper{
+	return &http3.Transport{
 		TLSClientConfig: tlsConfig,
 		QUICConfig:      quicConfig,
 		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
