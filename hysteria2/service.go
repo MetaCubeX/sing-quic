@@ -15,6 +15,7 @@ import (
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
+	"github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
 	"github.com/metacubex/sing/common"
@@ -136,8 +137,11 @@ func (s *Service[U]) Start(conn net.PacketConn) error {
 	if s.salamanderPassword != "" {
 		conn = NewSalamanderConn(conn, []byte(s.salamanderPassword))
 	}
-	tlsConfig := http3.ConfigureTLSConfig(s.tlsConfig)
-	listener, err := quic.Listen(conn, tlsConfig, s.quicConfig)
+	err := qtls.ConfigureHTTP3(s.tlsConfig)
+	if err != nil {
+		return err
+	}
+	listener, err := qtls.Listen(conn, s.tlsConfig, s.quicConfig)
 	if err != nil {
 		return err
 	}
@@ -152,7 +156,7 @@ func (s *Service[U]) Close() error {
 	)
 }
 
-func (s *Service[U]) loopConnections(listener *quic.Listener) {
+func (s *Service[U]) loopConnections(listener qtls.Listener) {
 	for {
 		connection, err := listener.Accept(s.ctx)
 		if err != nil {
