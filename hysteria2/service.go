@@ -171,7 +171,7 @@ func (s *Service[U]) loopConnections(listener qtls.Listener) {
 	}
 }
 
-func (s *Service[U]) handleConnection(connection quic.Connection) {
+func (s *Service[U]) handleConnection(connection *quic.Conn) {
 	session := &serverSession[U]{
 		Service:    s,
 		ctx:        s.ctx,
@@ -190,7 +190,7 @@ func (s *Service[U]) handleConnection(connection quic.Connection) {
 type serverSession[U comparable] struct {
 	*Service[U]
 	ctx           context.Context
-	quicConn      quic.Connection
+	quicConn      *quic.Conn
 	connAccess    sync.Mutex
 	connDone      chan struct{}
 	connErr       error
@@ -257,7 +257,7 @@ func (s *serverSession[U]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *serverSession[U]) handleStream0(frameType http3.FrameType, _ quic.ConnectionTracingID, stream quic.Stream, err error) (bool, error) {
+func (s *serverSession[U]) handleStream0(frameType http3.FrameType, _ quic.ConnectionTracingID, stream *quic.Stream, err error) (bool, error) {
 	if !s.authenticated || err != nil {
 		return false, nil
 	}
@@ -277,7 +277,7 @@ func (s *serverSession[U]) handleStream0(frameType http3.FrameType, _ quic.Conne
 	return true, nil
 }
 
-func (s *serverSession[U]) handleStream(stream quic.Stream) error {
+func (s *serverSession[U]) handleStream(stream *quic.Stream) error {
 	destinationString, err := protocol.ReadTCPRequest(stream)
 	if err != nil {
 		return E.New("read TCP request")
@@ -309,7 +309,7 @@ func (s *serverSession[U]) closeWithError(err error) {
 }
 
 type serverConn struct {
-	quic.Stream
+	*quic.Stream
 	responseWritten bool
 }
 

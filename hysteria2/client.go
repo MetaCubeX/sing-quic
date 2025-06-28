@@ -170,7 +170,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	if c.salamanderPassword != "" {
 		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
 	}
-	var quicConn quic.EarlyConnection
+	var quicConn *quic.Conn
 	http3Transport, err := qtls.CreateTransport(packetConn, &quicConn, serverAddr, c.tlsConfig, c.quicConfig)
 	if err != nil {
 		packetConn.Close()
@@ -285,7 +285,7 @@ func (c *Client) CloseWithError(err error) error {
 }
 
 type clientQUICConnection struct {
-	quicConn     quic.Connection
+	quicConn     *quic.Conn
 	rawConn      io.Closer
 	closeOnce    sync.Once
 	connDone     chan struct{}
@@ -320,7 +320,7 @@ func (c *clientQUICConnection) closeWithError(err error) {
 }
 
 type clientConn struct {
-	quic.Stream
+	*quic.Stream
 	destination    M.Socksaddr
 	requestWritten bool
 	responseRead   bool
