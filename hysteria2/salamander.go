@@ -5,9 +5,6 @@ import (
 
 	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/buf"
-	"github.com/metacubex/sing/common/bufio"
-	M "github.com/metacubex/sing/common/metadata"
-	N "github.com/metacubex/sing/common/network"
 
 	"golang.org/x/crypto/blake2b"
 )
@@ -22,20 +19,9 @@ type SalamanderPacketConn struct {
 }
 
 func NewSalamanderConn(conn net.PacketConn, password []byte) net.PacketConn {
-	writer, isVectorised := bufio.CreateVectorisedPacketWriter(conn)
-	if isVectorised {
-		return &VectorisedSalamanderPacketConn{
-			SalamanderPacketConn: SalamanderPacketConn{
-				PacketConn: conn,
-				password:   password,
-			},
-			writer: writer,
-		}
-	} else {
-		return &SalamanderPacketConn{
-			PacketConn: conn,
-			password:   password,
-		}
+	return &SalamanderPacketConn{
+		PacketConn: conn,
+		password:   password,
 	}
 }
 
@@ -67,39 +53,4 @@ func (s *SalamanderPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err erro
 		return
 	}
 	return len(p), nil
-}
-
-type VectorisedSalamanderPacketConn struct {
-	SalamanderPacketConn
-	writer N.VectorisedPacketWriter
-}
-
-func (s *VectorisedSalamanderPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	buffer := buf.NewSize(salamanderSaltLen)
-	buffer.WriteRandom(salamanderSaltLen)
-	key := blake2b.Sum256(append(s.password, buffer.Bytes()...))
-	for i := range p {
-		p[i] ^= key[i%blake2b.Size256]
-	}
-	err = s.writer.WriteVectorisedPacket([]*buf.Buffer{buffer, buf.As(p)}, M.SocksaddrFromNet(addr))
-	if err != nil {
-		return
-	}
-	return len(p), nil
-}
-
-func (s *VectorisedSalamanderPacketConn) WriteVectorisedPacket(buffers []*buf.Buffer, destination M.Socksaddr) error {
-	header := buf.NewSize(salamanderSaltLen)
-	defer header.Release()
-	header.WriteRandom(salamanderSaltLen)
-	key := blake2b.Sum256(append(s.password, header.Bytes()...))
-	var bufferIndex int
-	for _, buffer := range buffers {
-		content := buffer.Bytes()
-		for index, c := range content {
-			content[bufferIndex+index] = c ^ key[bufferIndex+index%blake2b.Size256]
-		}
-		bufferIndex += len(content)
-	}
-	return s.writer.WriteVectorisedPacket(append([]*buf.Buffer{header}, buffers...), destination)
 }
