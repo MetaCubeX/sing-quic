@@ -284,8 +284,8 @@ func (s *serverSession[U]) handleStream(stream *quic.Stream) error {
 	}
 	ctx := auth.ContextWithUser(s.ctx, s.authUser)
 	_ = s.handler.NewConnection(ctx, &serverConn{Stream: stream}, M.Metadata{
-		Source:      M.SocksaddrFromNet(s.quicConn.RemoteAddr()),
-		Destination: M.ParseSocksaddr(destinationString),
+		Source:      M.SocksaddrFromNet(s.quicConn.RemoteAddr()).Unwrap(),
+		Destination: M.ParseSocksaddr(destinationString).Unwrap(),
 	})
 	return nil
 }
