@@ -1,8 +1,9 @@
 package protocol
 
 import (
-	"net/http"
 	"strconv"
+
+	"github.com/metacubex/http"
 )
 
 const (

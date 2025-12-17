@@ -3,12 +3,11 @@ package qtls
 import (
 	"context"
 	"net"
-	"net/http"
 
-	tls "github.com/metacubex/utls"
-
+	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
+	"github.com/metacubex/tls"
 )
 
 type Config interface {

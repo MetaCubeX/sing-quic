@@ -4,18 +4,16 @@ import (
 	"context"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
-	"github.com/metacubex/randv2"
-	tls "github.com/metacubex/utls"
-
+	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
+	"github.com/metacubex/randv2"
 	qtls "github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
@@ -24,6 +22,7 @@ import (
 	"github.com/metacubex/sing/common/logger"
 	M "github.com/metacubex/sing/common/metadata"
 	N "github.com/metacubex/sing/common/network"
+	"github.com/metacubex/tls"
 )
 
 type ClientOptions struct {

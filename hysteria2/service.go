@@ -5,14 +5,12 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
-	tls "github.com/metacubex/utls"
-
+	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
 	"github.com/metacubex/sing-quic"
@@ -25,6 +23,7 @@ import (
 	"github.com/metacubex/sing/common/logger"
 	M "github.com/metacubex/sing/common/metadata"
 	N "github.com/metacubex/sing/common/network"
+	"github.com/metacubex/tls"
 )
 
 type ServiceOptions struct {
