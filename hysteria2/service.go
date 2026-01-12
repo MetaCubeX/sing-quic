@@ -179,8 +179,8 @@ func (s *Service[U]) handleConnection(connection *quic.Conn) {
 		udpConnMap: make(map[uint32]*udpPacketConn),
 	}
 	httpServer := http3.Server{
-		Handler:        session,
-		StreamHijacker: session.handleStream0,
+		Handler:          session,
+		StreamDispatcher: session.dispatchStream,
 	}
 	_ = httpServer.ServeQUICConn(connection)
 	_ = connection.CloseWithError(0, "")
@@ -256,7 +256,7 @@ func (s *serverSession[U]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *serverSession[U]) handleStream0(frameType http3.FrameType, _ quic.ConnectionTracingID, stream *quic.Stream, err error) (bool, error) {
+func (s *serverSession[U]) dispatchStream(frameType http3.FrameType, stream *quic.Stream, err error) (bool, error) {
 	if !s.authenticated || err != nil {
 		return false, nil
 	}

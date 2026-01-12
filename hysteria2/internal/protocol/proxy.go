@@ -39,6 +39,13 @@ const (
 
 func ReadTCPRequest(r io.Reader) (string, error) {
 	bReader := quicvarint.NewReader(r)
+	frameType, err := quicvarint.Read(bReader)
+	if err != nil {
+		return "", err
+	}
+	if frameType != FrameTypeTCPRequest {
+		return "", E.New("invalid frame type")
+	}
 	addrLen, err := quicvarint.Read(bReader)
 	if err != nil {
 		return "", err
