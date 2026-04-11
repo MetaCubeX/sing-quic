@@ -34,6 +34,7 @@ type ClientOptions struct {
 	ServerAddress      M.Socksaddr
 	ServerPorts        []uint16
 	HopInterval        time.Duration
+	HopIntervalMax     time.Duration
 	SendBPS            uint64
 	ReceiveBPS         uint64
 	SalamanderPassword string
@@ -54,6 +55,7 @@ type Client struct {
 	serverAddress      M.Socksaddr
 	serverPorts        []uint16
 	hopInterval        time.Duration
+	hopIntervalMax     time.Duration
 	sendBPS            uint64
 	receiveBPS         uint64
 	salamanderPassword string
@@ -106,6 +108,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		serverAddress:      options.ServerAddress,
 		serverPorts:        options.ServerPorts,
 		hopInterval:        options.HopInterval,
+		hopIntervalMax:     options.HopIntervalMax,
 		sendBPS:            options.SendBPS,
 		receiveBPS:         options.ReceiveBPS,
 		salamanderPassword: options.SalamanderPassword,
@@ -119,9 +122,16 @@ func NewClient(options ClientOptions) (*Client, error) {
 	return client, nil
 }
 
+func (c *Client) nextHopInterval() time.Duration {
+	if c.hopInterval >= c.hopIntervalMax {
+		return c.hopInterval
+	}
+	return c.hopInterval + time.Duration(randv2.Int64N(int64(c.hopIntervalMax-c.hopInterval)+1))
+}
+
 func (c *Client) hopLoop(conn *clientQUICConnection) {
-	ticker := time.NewTicker(c.hopInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(c.nextHopInterval())
+	defer timer.Stop()
 	c.logger.Debug("Entering hop loop ...")
 	remoteAddr, ok := conn.quicConn.RemoteAddr().(*net.UDPAddr)
 	if !ok || remoteAddr == nil {
@@ -130,11 +140,12 @@ func (c *Client) hopLoop(conn *clientQUICConnection) {
 	}
 	for {
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			targetAddr := *remoteAddr                                             // make a copy
 			targetAddr.Port = int(c.serverPorts[randv2.IntN(len(c.serverPorts))]) // only change port
 			conn.quicConn.SetRemoteAddr(&targetAddr)
 			c.logger.Debug("Hopped to ", &targetAddr)
+			timer.Reset(c.nextHopInterval())
 			continue
 		case <-c.ctx.Done():
 		case <-conn.quicConn.Context().Done():
