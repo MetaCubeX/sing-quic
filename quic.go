@@ -3,72 +3,28 @@ package qtls
 import (
 	"context"
 	"net"
+	"net/netip"
 
-	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
-	"github.com/metacubex/quic-go/http3"
 	"github.com/metacubex/tls"
 )
 
-type Config interface {
-	Dial(ctx context.Context, conn net.PacketConn, addr net.Addr, config *quic.Config) (*quic.Conn, error)
-	DialEarly(ctx context.Context, conn net.PacketConn, addr net.Addr, config *quic.Config) (*quic.Conn, error)
-	CreateTransport(conn net.PacketConn, quicConnPtr **quic.Conn, serverAddr *net.UDPAddr, quicConfig *quic.Config) http.RoundTripper
+type PacketDialer interface {
+	ListenPacket(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error)
 }
 
-type ServerConfig interface {
-	Listen(conn net.PacketConn, config *quic.Config) (Listener, error)
-	ListenEarly(conn net.PacketConn, config *quic.Config) (EarlyListener, error)
-	ConfigureHTTP3()
+type PacketDialerFunc func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error)
+
+func (f PacketDialerFunc) ListenPacket(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
+	return f(ctx, network, address, rAddrPort)
 }
 
-type Listener interface {
-	Accept(ctx context.Context) (*quic.Conn, error)
-	Close() error
-	Addr() net.Addr
+type QuicDialer interface {
+	DialContext(ctx context.Context, addr string, listener PacketDialer, tlsCfg *tls.Config, cfg *quic.Config, early bool) (net.PacketConn, *quic.Conn, error)
 }
 
-type EarlyListener interface {
-	Accept(ctx context.Context) (*quic.Conn, error)
-	Close() error
-	Addr() net.Addr
-}
+type QuicDialerFunc func(ctx context.Context, addr string, listener PacketDialer, tlsCfg *tls.Config, cfg *quic.Config, early bool) (net.PacketConn, *quic.Conn, error)
 
-func Dial(ctx context.Context, conn net.PacketConn, addr net.Addr, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
-	return quic.Dial(ctx, conn, addr, tlsConfig, quicConfig)
-}
-
-func DialEarly(ctx context.Context, conn net.PacketConn, addr net.Addr, tlsConfig *tls.Config, quicConfig *quic.Config) (*quic.Conn, error) {
-	return quic.DialEarly(ctx, conn, addr, tlsConfig, quicConfig)
-}
-
-func CreateTransport(conn net.PacketConn, quicConnPtr **quic.Conn, serverAddr *net.UDPAddr, tlsConfig *tls.Config, quicConfig *quic.Config) (http.RoundTripper, error) {
-	return &http3.Transport{
-		TLSClientConfig: tlsConfig,
-		QUICConfig:      quicConfig,
-		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-			quicConn, err := quic.DialEarly(ctx, conn, serverAddr, tlsCfg, cfg)
-			if err != nil {
-				return nil, err
-			}
-			*quicConnPtr = quicConn
-			return quicConn, nil
-		},
-	}, nil
-}
-
-func Listen(conn net.PacketConn, tlsConfig *tls.Config, quicConfig *quic.Config) (Listener, error) {
-	return quic.Listen(conn, tlsConfig, quicConfig)
-}
-
-func ListenEarly(conn net.PacketConn, tlsConfig *tls.Config, quicConfig *quic.Config) (EarlyListener, error) {
-	return quic.ListenEarly(conn, tlsConfig, quicConfig)
-}
-
-func ConfigureHTTP3(tlsConfig *tls.Config) error {
-	if len(tlsConfig.NextProtos) == 0 {
-		tlsConfig.NextProtos = []string{http3.NextProtoH3}
-	}
-	http3.ConfigureTLSConfig(tlsConfig)
-	return nil
+func (f QuicDialerFunc) DialContext(ctx context.Context, addr string, listener PacketDialer, tlsCfg *tls.Config, cfg *quic.Config, early bool) (net.PacketConn, *quic.Conn, error) {
+	return f(ctx, addr, listener, tlsCfg, cfg, early)
 }

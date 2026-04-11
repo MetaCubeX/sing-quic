@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"runtime"
@@ -21,16 +22,16 @@ import (
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/sing/common/logger"
 	M "github.com/metacubex/sing/common/metadata"
-	N "github.com/metacubex/sing/common/network"
 	"github.com/metacubex/tls"
 )
 
 type ClientOptions struct {
 	Context            context.Context
-	Dialer             N.Dialer
+	QuicDialer         qtls.QuicDialer
+	PacketListener     qtls.PacketDialer
 	Logger             logger.Logger
 	BrutalDebug        bool
-	ServerAddress      func(ctx context.Context) (*net.UDPAddr, error)
+	ServerAddress      M.Socksaddr
 	ServerPorts        []uint16
 	HopInterval        time.Duration
 	SendBPS            uint64
@@ -46,10 +47,11 @@ type ClientOptions struct {
 
 type Client struct {
 	ctx                context.Context
-	dialer             N.Dialer
+	quicDialer         qtls.QuicDialer
+	packetDialer       qtls.PacketDialer
 	logger             logger.Logger
 	brutalDebug        bool
-	serverAddress      func(ctx context.Context) (*net.UDPAddr, error)
+	serverAddress      M.Socksaddr
 	serverPorts        []uint16
 	hopInterval        time.Duration
 	sendBPS            uint64
@@ -97,7 +99,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}
 	client := &Client{
 		ctx:                options.Context,
-		dialer:             options.Dialer,
+		quicDialer:         options.QuicDialer,
+		packetDialer:       options.PacketListener,
 		logger:             options.Logger,
 		brutalDebug:        options.BrutalDebug,
 		serverAddress:      options.ServerAddress,
@@ -116,10 +119,15 @@ func NewClient(options ClientOptions) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) hopLoop(conn *clientQUICConnection, remoteAddr *net.UDPAddr) {
+func (c *Client) hopLoop(conn *clientQUICConnection) {
 	ticker := time.NewTicker(c.hopInterval)
 	defer ticker.Stop()
 	c.logger.Debug("Entering hop loop ...")
+	remoteAddr, ok := conn.quicConn.RemoteAddr().(*net.UDPAddr)
+	if !ok || remoteAddr == nil {
+		c.logger.Error("Failed to get remote address for hop", remoteAddr)
+		return
+	}
 	for {
 		select {
 		case <-ticker.C:
@@ -155,25 +163,33 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
-	serverAddr, err := c.serverAddress(ctx)
-	if err != nil {
-		return nil, err
-	}
+	serverAddr := c.serverAddress
 	if len(c.serverPorts) > 0 { // randomize select a port from serverPorts
-		serverAddr.Port = int(c.serverPorts[randv2.IntN(len(c.serverPorts))])
+		serverAddr.Port = c.serverPorts[randv2.IntN(len(c.serverPorts))]
 	}
-	packetConn, err := c.dialer.ListenPacket(ctx, M.SocksaddrFromNet(serverAddr).Unwrap())
-	if err != nil {
-		return nil, err
-	}
+	packetDialer := c.packetDialer
+
 	if c.salamanderPassword != "" {
-		packetConn = NewSalamanderConn(packetConn, []byte(c.salamanderPassword))
+		packetDialer = qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
+			pc, err := c.packetDialer.ListenPacket(ctx, network, address, rAddrPort)
+			if err != nil {
+				return nil, err
+			}
+			pc = NewSalamanderConn(pc, []byte(c.salamanderPassword))
+			return pc, nil
+		})
 	}
-	var quicConn *quic.Conn
-	http3Transport, err := qtls.CreateTransport(packetConn, &quicConn, serverAddr, c.tlsConfig, c.quicConfig)
+
+	packetConn, quicConn, err := c.quicDialer.DialContext(ctx, serverAddr.String(), packetDialer, c.tlsConfig, c.quicConfig, true)
 	if err != nil {
-		packetConn.Close()
 		return nil, err
+	}
+	http3Transport := &http3.Transport{
+		TLSClientConfig: c.tlsConfig,
+		QUICConfig:      c.quicConfig,
+		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+			return quicConn, nil
+		},
 	}
 	request := &http.Request{
 		Method: http.MethodPost,
@@ -187,18 +203,14 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	protocol.AuthRequestToHeader(request.Header, protocol.AuthRequest{Auth: c.password, Rx: c.receiveBPS})
 	response, err := http3Transport.RoundTrip(request.WithContext(ctx))
 	if err != nil {
-		if quicConn != nil {
-			quicConn.CloseWithError(0, "")
-		}
-		packetConn.Close()
+		_ = quicConn.CloseWithError(0, "")
+		_ = packetConn.Close()
 		return nil, err
 	}
 	response.Body.Close()
 	if response.StatusCode != protocol.StatusAuthOK {
-		if quicConn != nil {
-			quicConn.CloseWithError(0, "")
-		}
-		packetConn.Close()
+		_ = quicConn.CloseWithError(0, "")
+		_ = packetConn.Close()
 		return nil, E.New("authentication failed, status code: ", response.StatusCode)
 	}
 	authResponse := protocol.AuthResponseFromHeader(response.Header)
@@ -223,7 +235,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	}
 	c.conn = conn
 	if c.hopInterval > 0 {
-		go c.hopLoop(conn, serverAddr)
+		go c.hopLoop(conn)
 	}
 	return conn, nil
 }
