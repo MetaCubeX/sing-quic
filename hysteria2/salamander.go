@@ -7,6 +7,7 @@ import (
 	"github.com/metacubex/sing/common/buf"
 
 	"golang.org/x/crypto/blake2b"
+	"golang.org/x/exp/slices"
 )
 
 const salamanderSaltLen = 8
@@ -21,7 +22,7 @@ type SalamanderPacketConn struct {
 func NewSalamanderConn(conn net.PacketConn, password []byte) net.PacketConn {
 	return &SalamanderPacketConn{
 		PacketConn: conn,
-		password:   password,
+		password:   slices.Clip(password),
 	}
 }
 
