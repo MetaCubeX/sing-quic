@@ -42,7 +42,7 @@ type ClientOptions struct {
 	TLSConfig          *tls.Config
 	QUICConfig         *quic.Config
 	UDPDisabled        bool
-	CWND               int
+	SetBBRCongestion   SetCongestionControllerFunc
 	UdpMTU             int
 }
 
@@ -63,7 +63,7 @@ type Client struct {
 	tlsConfig          *tls.Config
 	quicConfig         *quic.Config
 	udpDisabled        bool
-	cwnd               int
+	setBBRCongestion   SetCongestionControllerFunc
 	udpMTU             int
 
 	connAccess sync.Mutex
@@ -116,7 +116,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		tlsConfig:          options.TLSConfig,
 		quicConfig:         quicConfig,
 		udpDisabled:        options.UDPDisabled,
-		cwnd:               options.CWND,
+		setBBRCongestion:   options.SetBBRCongestion,
 		udpMTU:             options.UdpMTU,
 	}
 	return client, nil
@@ -232,7 +232,9 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	if !authResponse.RxAuto && actualTx > 0 {
 		quicConn.SetCongestionControl(hyCC.NewBrutalSender(actualTx, c.brutalDebug, c.logger))
 	} else {
-		SetCongestionController(quicConn, "bbr", c.cwnd)
+		if c.setBBRCongestion != nil {
+			c.setBBRCongestion(quicConn)
+		}
 	}
 	conn := &clientQUICConnection{
 		quicConn:    quicConn,

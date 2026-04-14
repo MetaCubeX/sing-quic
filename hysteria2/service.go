@@ -39,7 +39,7 @@ type ServiceOptions struct {
 	UDPTimeout            time.Duration
 	Handler               ServerHandler
 	MasqueradeHandler     http.Handler
-	CWND                  int
+	SetBBRCongestion      SetCongestionControllerFunc
 	UdpMTU                int
 }
 
@@ -64,7 +64,7 @@ type Service[U comparable] struct {
 	handler               ServerHandler
 	masqueradeHandler     http.Handler
 	quicListener          io.Closer
-	cwnd                  int
+	setBBRCongestion      SetCongestionControllerFunc
 	udpMTU                int
 }
 
@@ -118,7 +118,7 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 		udpTimeout:            options.UDPTimeout,
 		handler:               options.Handler,
 		masqueradeHandler:     options.MasqueradeHandler,
-		cwnd:                  options.CWND,
+		setBBRCongestion:      options.SetBBRCongestion,
 		udpMTU:                options.UdpMTU,
 	}, nil
 }
@@ -225,7 +225,9 @@ func (s *serverSession[U]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			s.quicConn.SetCongestionControl(hyCC.NewBrutalSender(rx, s.brutalDebug, s.logger))
 		} else {
-			SetCongestionController(s.quicConn, "bbr", s.cwnd)
+			if s.setBBRCongestion != nil {
+				s.setBBRCongestion(s.quicConn)
+			}
 			rxAuto = true
 		}
 		protocol.AuthResponseToHeader(w.Header(), protocol.AuthResponse{
