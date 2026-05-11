@@ -15,6 +15,7 @@ import (
 	"github.com/metacubex/quic-go/http3"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
+	"github.com/metacubex/sing-quic/hysteria2/realm"
 	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/auth"
 	"github.com/metacubex/sing/common/baderror"
@@ -39,6 +40,7 @@ type ServiceOptions struct {
 	UDPTimeout            time.Duration
 	Handler               ServerHandler
 	MasqueradeHandler     http.Handler
+	RealmOptions          *realm.Options
 	SetBBRCongestion      SetCongestionControllerFunc
 	UdpMTU                int
 }
@@ -64,6 +66,7 @@ type Service[U comparable] struct {
 	handler               ServerHandler
 	masqueradeHandler     http.Handler
 	quicListener          io.Closer
+	realmServer           *realm.Server
 	setBBRCongestion      SetCongestionControllerFunc
 	udpMTU                int
 }
@@ -103,6 +106,14 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 	if len(options.TLSConfig.NextProtos) == 0 {
 		options.TLSConfig.NextProtos = []string{http3.NextProtoH3}
 	}
+	var realmServer *realm.Server
+	if options.RealmOptions != nil {
+		var err error
+		realmServer, err = realm.NewServer(*options.RealmOptions)
+		if err != nil {
+			return nil, E.Cause(err, "create realm server")
+		}
+	}
 	return &Service[U]{
 		ctx:                   options.Context,
 		logger:                options.Logger,
@@ -118,6 +129,7 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 		udpTimeout:            options.UDPTimeout,
 		handler:               options.Handler,
 		masqueradeHandler:     options.MasqueradeHandler,
+		realmServer:           realmServer,
 		setBBRCongestion:      options.SetBBRCongestion,
 		udpMTU:                options.UdpMTU,
 	}, nil
@@ -132,6 +144,9 @@ func (s *Service[U]) UpdateUsers(userList []U, passwordList []string) {
 }
 
 func (s *Service[U]) Start(conn net.PacketConn) error {
+	if s.realmServer != nil {
+		return s.startWithRealm(conn)
+	}
 	if s.salamanderPassword != "" {
 		conn = NewSalamanderConn(conn, []byte(s.salamanderPassword))
 	}
@@ -144,10 +159,36 @@ func (s *Service[U]) Start(conn net.PacketConn) error {
 	return nil
 }
 
+func (s *Service[U]) startWithRealm(conn net.PacketConn) error {
+	punchConn, err := s.realmServer.Start(s.ctx, conn)
+	if err != nil {
+		return E.Cause(err, "start realm server")
+	}
+	var quicConn net.PacketConn = punchConn
+	if s.salamanderPassword != "" {
+		quicConn = NewSalamanderConn(quicConn, []byte(s.salamanderPassword))
+	}
+	listener, err := quic.Listen(quicConn, s.tlsConfig, s.quicConfig)
+	if err != nil {
+		return E.Errors(err, s.realmServer.Close())
+	}
+	s.quicListener = listener
+	go s.loopConnections(listener)
+	return nil
+}
+
 func (s *Service[U]) Close() error {
-	return common.Close(
-		s.quicListener,
-	)
+	var realmErr error
+	if s.realmServer != nil {
+		realmErr = s.realmServer.Close()
+	}
+	return E.Errors(realmErr, common.Close(s.quicListener))
+}
+
+func (s *Service[U]) Reset() {
+	if s.realmServer != nil {
+		s.realmServer.Reset()
+	}
 }
 
 func (s *Service[U]) loopConnections(listener *quic.Listener) {

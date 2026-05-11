@@ -18,6 +18,7 @@ import (
 	qtls "github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
+	"github.com/metacubex/sing-quic/hysteria2/realm"
 	"github.com/metacubex/sing/common/baderror"
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/sing/common/logger"
@@ -42,6 +43,7 @@ type ClientOptions struct {
 	TLSConfig          *tls.Config
 	QUICConfig         *quic.Config
 	UDPDisabled        bool
+	RealmOptions       *realm.Options
 	SetBBRCongestion   SetCongestionControllerFunc
 	UdpMTU             int
 }
@@ -63,6 +65,8 @@ type Client struct {
 	tlsConfig          *tls.Config
 	quicConfig         *quic.Config
 	udpDisabled        bool
+	realmOptions       *realm.Options
+	controlClient      *realm.ControlClient
 	setBBRCongestion   SetCongestionControllerFunc
 	udpMTU             int
 
@@ -99,6 +103,17 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if len(options.TLSConfig.NextProtos) == 0 {
 		options.TLSConfig.NextProtos = []string{http3.NextProtoH3}
 	}
+	if options.RealmOptions != nil && len(options.ServerPorts) > 0 {
+		return nil, E.New("realm and port hopping are mutually exclusive")
+	}
+	var controlClient *realm.ControlClient
+	if options.RealmOptions != nil {
+		var err error
+		controlClient, err = realm.NewControlClient(options.RealmOptions.ServerURL, options.RealmOptions.Token, options.RealmOptions.HTTPClient)
+		if err != nil {
+			return nil, E.Cause(err, "create control client")
+		}
+	}
 	client := &Client{
 		ctx:                options.Context,
 		quicDialer:         options.QuicDialer,
@@ -116,6 +131,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		tlsConfig:          options.TLSConfig,
 		quicConfig:         quicConfig,
 		udpDisabled:        options.UDPDisabled,
+		realmOptions:       options.RealmOptions,
+		controlClient:      controlClient,
 		setBBRCongestion:   options.SetBBRCongestion,
 		udpMTU:             options.UdpMTU,
 	}
@@ -174,15 +191,53 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
+	if c.realmOptions != nil {
+		return c.offerNewRealm(ctx)
+	}
 	serverAddr := c.serverAddress
 	if len(c.serverPorts) > 0 { // randomize select a port from serverPorts
 		serverAddr.Port = c.serverPorts[randv2.IntN(len(c.serverPorts))]
 	}
-	packetDialer := c.packetDialer
+	return c.authenticateAndWrap(ctx, c.packetDialer, serverAddr)
+}
 
+func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, error) {
+	rawConn, err := c.packetDialer.ListenPacket(ctx, "udp", "", netip.AddrPort{})
+	if err != nil {
+		return nil, E.Cause(err, "listen UDP for realm")
+	}
+	localAddresses, err := realm.Discover(ctx, rawConn, c.realmOptions.STUNServers)
+	if err != nil {
+		rawConn.Close()
+		return nil, E.Cause(err, "realm STUN discovery")
+	}
+	localMetadata, err := realm.GeneratePunchMetadata()
+	if err != nil {
+		rawConn.Close()
+		return nil, E.Cause(err, "generate punch metadata")
+	}
+	response, err := c.controlClient.Connect(ctx, c.realmOptions.RealmID, localAddresses, localMetadata)
+	if err != nil {
+		rawConn.Close()
+		return nil, E.Cause(err, "realm connect")
+	}
+	result, err := realm.Punch(ctx, rawConn, localAddresses, response.Addresses, response.PunchMetadata)
+	if err != nil {
+		rawConn.Close()
+		return nil, E.Cause(err, "realm punch")
+	}
+	peerAddr := M.SocksaddrFromNetIP(result.PeerAddr)
+	packetDialer := qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
+		return rawConn, nil
+	})
+	return c.authenticateAndWrap(ctx, packetDialer, peerAddr)
+}
+
+func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.PacketDialer, serverAddr M.Socksaddr) (*clientQUICConnection, error) {
 	if c.salamanderPassword != "" {
+		_packetDialer := packetDialer // make a copy
 		packetDialer = qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
-			pc, err := c.packetDialer.ListenPacket(ctx, network, address, rAddrPort)
+			pc, err := _packetDialer.ListenPacket(ctx, network, address, rAddrPort)
 			if err != nil {
 				return nil, err
 			}
@@ -195,6 +250,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	http3Transport := &http3.Transport{
 		TLSClientConfig: c.tlsConfig,
 		QUICConfig:      c.quicConfig,
