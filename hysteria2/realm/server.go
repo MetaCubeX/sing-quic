@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"net"
 	"net/netip"
-	"slices"
 	"sync"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/sing/common/logger"
 
+	"golang.org/x/exp/slices"
 	"golang.org/x/sync/singleflight"
 )
 

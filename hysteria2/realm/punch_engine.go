@@ -4,12 +4,13 @@ import (
 	"context"
 	"net"
 	"net/netip"
-	"slices"
 	"sync"
 	"time"
 
 	E "github.com/metacubex/sing/common/exceptions"
 	M "github.com/metacubex/sing/common/metadata"
+
+	"golang.org/x/exp/slices"
 )
 
 const (

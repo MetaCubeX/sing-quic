@@ -1,7 +1,6 @@
 package realm
 
 import (
-	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -44,21 +43,21 @@ func NewPunchPacketConn(conn net.PacketConn, eventBuffer int) *PunchPacketConn {
 
 func (c *PunchPacketConn) SyscallConn() (syscall.RawConn, error) {
 	if c.udp == nil {
-		return nil, errors.ErrUnsupported
+		return nil, ErrUnsupported
 	}
 	return c.udp.SyscallConn()
 }
 
 func (c *PunchPacketConn) SetReadBuffer(bytes int) error {
 	if c.udp == nil {
-		return errors.ErrUnsupported
+		return ErrUnsupported
 	}
 	return c.udp.SetReadBuffer(bytes)
 }
 
 func (c *PunchPacketConn) SetWriteBuffer(bytes int) error {
 	if c.udp == nil {
-		return errors.ErrUnsupported
+		return ErrUnsupported
 	}
 	return c.udp.SetWriteBuffer(bytes)
 }
