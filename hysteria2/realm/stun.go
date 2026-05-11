@@ -4,53 +4,37 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/metacubex/sing-quic/hysteria2/internal/stun"
 	E "github.com/metacubex/sing/common/exceptions"
-	N "github.com/metacubex/sing/common/network"
+	M "github.com/metacubex/sing/common/metadata"
 )
 
 const stunTimeout = 4 * time.Second
 
-type addrFamily int
-
-const (
-	addrFamilyBoth addrFamily = iota
-	addrFamilyIPv4
-	addrFamilyIPv6
-)
-
-func localAddrFamily(addr net.Addr) addrFamily {
-	udpAddr, isUDP := addr.(*net.UDPAddr)
-	if !isUDP || udpAddr.IP == nil || udpAddr.IP.IsUnspecified() {
-		return addrFamilyBoth
+func resolveSTUNServers(ctx context.Context, servers []string, resolver Resolver, ipv4, ipv6 bool) ([]netip.AddrPort, error) {
+	if resolver == nil {
+		return nil, E.New("realm: resolver is required")
 	}
-	if udpAddr.IP.To4() != nil {
-		return addrFamilyIPv4
-	}
-	return addrFamilyIPv6
-}
-
-func resolveSTUNServers(ctx context.Context, servers []string, family addrFamily) ([]*net.UDPAddr, error) {
-	var resolved []*net.UDPAddr
-	resolver := net.DefaultResolver
+	var resolved []netip.AddrPort
 	for _, server := range servers {
 		host, port, err := net.SplitHostPort(server)
 		if err != nil {
 			host = server
 			port = "3478"
 		}
-		addresses, err := resolver.LookupNetIP(ctx, networkForFamily(family), host)
+		addresses, err := resolver(ctx, host, ipv4, ipv6)
 		if err != nil {
 			return nil, E.Cause(err, "resolve STUN server: ", server)
 		}
-		portNumber, err := net.LookupPort(N.NetworkUDP, port)
+		portNumber, err := strconv.ParseUint(port, 10, 16)
 		if err != nil {
 			return nil, E.Cause(err, "resolve STUN port: ", port)
 		}
 		for _, address := range addresses {
-			resolved = append(resolved, net.UDPAddrFromAddrPort(netip.AddrPortFrom(address, uint16(portNumber))))
+			resolved = append(resolved, netip.AddrPortFrom(address, uint16(portNumber)))
 		}
 	}
 	if len(resolved) == 0 {
@@ -59,19 +43,19 @@ func resolveSTUNServers(ctx context.Context, servers []string, family addrFamily
 	return resolved, nil
 }
 
-func networkForFamily(family addrFamily) string {
-	switch family {
-	case addrFamilyIPv4:
-		return "ip4"
-	case addrFamilyIPv6:
-		return "ip6"
+func Discover(ctx context.Context, conn net.PacketConn, servers []string, resolver Resolver) ([]netip.AddrPort, error) {
+	var ipv4, ipv6 bool
+	localAddrPort := M.SocksaddrFromNet(conn.LocalAddr()).Unwrap().AddrPort()
+	switch {
+	case !localAddrPort.IsValid() || localAddrPort.Addr().IsUnspecified():
+		ipv4 = true
+		ipv6 = true
+	case localAddrPort.Addr().Is4():
+		ipv4 = true
 	default:
-		return N.NetworkIP
+		ipv6 = true
 	}
-}
-
-func Discover(ctx context.Context, conn net.PacketConn, servers []string) ([]netip.AddrPort, error) {
-	resolved, err := resolveSTUNServers(ctx, servers, localAddrFamily(conn.LocalAddr()))
+	resolved, err := resolveSTUNServers(ctx, servers, resolver, ipv4, ipv6)
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +106,19 @@ func Discover(ctx context.Context, conn net.PacketConn, servers []string) ([]net
 	return result, nil
 }
 
-func DiscoverDemuxed(ctx context.Context, conn *PunchPacketConn, servers []string) ([]netip.AddrPort, error) {
-	resolved, err := resolveSTUNServers(ctx, servers, localAddrFamily(conn.LocalAddr()))
+func DiscoverDemuxed(ctx context.Context, conn *PunchPacketConn, servers []string, resolver Resolver) ([]netip.AddrPort, error) {
+	var ipv4, ipv6 bool
+	localAddrPort := M.SocksaddrFromNet(conn.LocalAddr()).Unwrap().AddrPort()
+	switch {
+	case !localAddrPort.IsValid() || localAddrPort.Addr().IsUnspecified():
+		ipv4 = true
+		ipv6 = true
+	case localAddrPort.Addr().Is4():
+		ipv4 = true
+	default:
+		ipv6 = true
+	}
+	resolved, err := resolveSTUNServers(ctx, servers, resolver, ipv4, ipv6)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +166,7 @@ func DiscoverDemuxed(ctx context.Context, conn *PunchPacketConn, servers []strin
 	}
 }
 
-func sendSTUNRequests(conn net.PacketConn, servers []*net.UDPAddr) (map[stun.TransactionID]struct{}, error) {
+func sendSTUNRequests(conn net.PacketConn, servers []netip.AddrPort) (map[stun.TransactionID]struct{}, error) {
 	pending := make(map[stun.TransactionID]struct{}, len(servers))
 	var sendErr error
 	for _, server := range servers {
@@ -179,7 +174,7 @@ func sendSTUNRequests(conn net.PacketConn, servers []*net.UDPAddr) (map[stun.Tra
 		if err != nil {
 			return nil, E.Cause(err, "build STUN request")
 		}
-		_, err = conn.WriteTo(request.Raw, server)
+		_, err = conn.WriteTo(request.Raw, net.UDPAddrFromAddrPort(server))
 		if err != nil {
 			sendErr = E.Errors(sendErr, E.Cause(err, "send STUN request to ", server))
 			continue

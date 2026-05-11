@@ -206,7 +206,7 @@ func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, erro
 	if err != nil {
 		return nil, E.Cause(err, "listen UDP for realm")
 	}
-	localAddresses, err := realm.Discover(ctx, rawConn, c.realmOptions.STUNServers)
+	localAddresses, err := realm.Discover(ctx, rawConn, c.realmOptions.STUNServers, c.realmOptions.Resolver)
 	if err != nil {
 		rawConn.Close()
 		return nil, E.Cause(err, "realm STUN discovery")

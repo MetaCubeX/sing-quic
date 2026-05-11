@@ -27,13 +27,9 @@ type PunchResult struct {
 }
 
 func Punch(ctx context.Context, conn net.PacketConn, localAddresses []netip.AddrPort, peerAddresses []netip.AddrPort, metadata PunchMetadata) (PunchResult, error) {
-	candidates := candidatePunchAddrs(localAddresses, peerAddresses, localAddrFamily(conn.LocalAddr()))
+	candidates := candidatePunchAddrs(localAddresses, peerAddresses, conn.LocalAddr())
 	if len(candidates) == 0 {
 		return PunchResult{}, E.New("no compatible peer addresses")
-	}
-	candidateSet := make(map[netip.AddrPort]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		candidateSet[candidate] = struct{}{}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, punchTimeout)
@@ -65,12 +61,8 @@ func Punch(ctx context.Context, conn net.PacketConn, localAddresses []netip.Addr
 			}
 			return PunchResult{}, E.Cause(readErr, "punch read")
 		}
-		peerAddr, ok := addrToAddrPort(addr)
-		if !ok {
-			continue
-		}
-		_, isCandidate := candidateSet[peerAddr]
-		if !isCandidate {
+		peerAddr := M.SocksaddrFromNet(addr).Unwrap().AddrPort()
+		if !peerAddr.IsValid() {
 			continue
 		}
 		packetType, decodeErr := DecodePunchPacket(buffer[:n], metadata)
@@ -125,7 +117,7 @@ func (p *ServerPuncher) dispatch(ctx context.Context) {
 }
 
 func (p *ServerPuncher) Respond(ctx context.Context, attemptID string, localAddresses []netip.AddrPort, peerAddresses []netip.AddrPort, metadata PunchMetadata) (PunchResult, error) {
-	candidates := candidatePunchAddrs(localAddresses, peerAddresses, localAddrFamily(p.conn.LocalAddr()))
+	candidates := candidatePunchAddrs(localAddresses, peerAddresses, p.conn.LocalAddr())
 	if len(candidates) == 0 {
 		return PunchResult{}, E.New("no compatible peer addresses")
 	}
@@ -180,15 +172,40 @@ func sendPunchPacket(conn net.PacketConn, address netip.AddrPort, packetType byt
 	_, _ = conn.WriteTo(packet, net.UDPAddrFromAddrPort(address))
 }
 
-func candidatePunchAddrs(localAddresses, peerAddresses []netip.AddrPort, connFamily addrFamily) []netip.AddrPort {
-	allowed := punchFamilies(localAddresses, connFamily)
+func candidatePunchAddrs(localAddresses, peerAddresses []netip.AddrPort, connAddr net.Addr) []netip.AddrPort {
+	var allowV4, allowV6 bool
+	for _, address := range localAddresses {
+		if !address.IsValid() {
+			continue
+		}
+		if address.Addr().Is4() {
+			allowV4 = true
+		} else if address.Addr().Is6() {
+			allowV6 = true
+		}
+	}
+	if !allowV4 && !allowV6 {
+		localAddrPort := M.SocksaddrFromNet(connAddr).Unwrap().AddrPort()
+		switch {
+		case !localAddrPort.IsValid() || localAddrPort.Addr().IsUnspecified():
+			allowV4 = true
+			allowV6 = true
+		case localAddrPort.Addr().Is4():
+			allowV4 = true
+		default:
+			allowV6 = true
+		}
+	}
 	seen := make(map[netip.AddrPort]struct{})
 	var candidates []netip.AddrPort
 	for _, address := range peerAddresses {
 		if !address.IsValid() || address.Port() == 0 {
 			continue
 		}
-		if !allowed.allows(address.Addr()) {
+		if address.Addr().Is4() && !allowV4 {
+			continue
+		}
+		if address.Addr().Is6() && !allowV6 {
 			continue
 		}
 		_, exists := seen[address]
@@ -249,57 +266,4 @@ func predictablePortGroup(ports []uint16) bool {
 		}
 	}
 	return true
-}
-
-type punchFamilySet struct {
-	v4 bool
-	v6 bool
-}
-
-func punchFamilies(localAddresses []netip.AddrPort, connFamily addrFamily) punchFamilySet {
-	var families punchFamilySet
-	for _, address := range localAddresses {
-		if !address.IsValid() {
-			continue
-		}
-		if address.Addr().Is4() {
-			families.v4 = true
-		} else if address.Addr().Is6() {
-			families.v6 = true
-		}
-	}
-	if families.v4 || families.v6 {
-		return families
-	}
-	switch connFamily {
-	case addrFamilyIPv4:
-		families.v4 = true
-	case addrFamilyIPv6:
-		families.v6 = true
-	default:
-		families.v4 = true
-		families.v6 = true
-	}
-	return families
-}
-
-func (s punchFamilySet) allows(address netip.Addr) bool {
-	if address.Is4() {
-		return s.v4
-	}
-	if address.Is6() {
-		return s.v6
-	}
-	return false
-}
-
-func addrToAddrPort(addr net.Addr) (netip.AddrPort, bool) {
-	udpAddr, isUDP := addr.(*net.UDPAddr)
-	if !isUDP {
-		return netip.AddrPort{}, false
-	}
-	if udpAddr.Port <= 0 || udpAddr.Port > 65535 {
-		return netip.AddrPort{}, false
-	}
-	return M.SocksaddrFromNet(udpAddr).Unwrap().AddrPort(), true
 }

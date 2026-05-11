@@ -24,12 +24,15 @@ const (
 	sseBackoffMax       = 30 * time.Second
 )
 
+type Resolver func(ctx context.Context, host string, ipv4, ipv6 bool) ([]netip.Addr, error)
+
 type Options struct {
 	ServerURL   string
 	Token       string
 	HTTPClient  *http.Client
 	RealmID     string
 	STUNServers []string
+	Resolver    Resolver
 	Logger      logger.Logger
 }
 
@@ -64,6 +67,9 @@ func NewServer(options Options) (*Server, error) {
 	if len(options.STUNServers) == 0 {
 		return nil, E.New("at least one STUN server is required")
 	}
+	if options.Resolver == nil {
+		return nil, E.New("resolver is required")
+	}
 	return &Server{
 		options:       options,
 		controlClient: controlClient,
@@ -75,7 +81,7 @@ func NewServer(options Options) (*Server, error) {
 func (s *Server) Start(ctx context.Context, conn net.PacketConn) (*PunchPacketConn, error) {
 	punchConn := NewPunchPacketConn(conn, eventBufferSize)
 	s.punchConn = punchConn
-	addresses, err := Discover(ctx, conn, s.options.STUNServers)
+	addresses, err := Discover(ctx, conn, s.options.STUNServers, s.options.Resolver)
 	if err != nil {
 		return nil, E.Cause(err, "initial STUN discovery")
 	}
@@ -269,7 +275,7 @@ func (s *Server) connectAddresses(ctx context.Context) ([]netip.AddrPort, error)
 		if recheck != nil {
 			return recheck, nil
 		}
-		fresh, discoverErr := DiscoverDemuxed(ctx, s.punchConn, s.options.STUNServers)
+		fresh, discoverErr := DiscoverDemuxed(ctx, s.punchConn, s.options.STUNServers, s.options.Resolver)
 		if discoverErr != nil {
 			return nil, discoverErr
 		}

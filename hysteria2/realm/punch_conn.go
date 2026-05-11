@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/metacubex/sing-quic/hysteria2/internal/stun"
+	M "github.com/metacubex/sing/common/metadata"
 )
 
 type PunchPacketEvent struct {
@@ -71,8 +72,8 @@ func (c *PunchPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 		data := p[:n]
 		if stun.IsMessage(data) {
 			message, decodeErr := stun.Decode(data)
-			address, addressOK := addrToAddrPort(addr)
-			if decodeErr == nil && addressOK {
+			address := M.SocksaddrFromNet(addr).Unwrap().AddrPort()
+			if decodeErr == nil && address.IsValid() {
 				select {
 				case c.stunEvents <- STUNPacketEvent{Message: message, Address: address}:
 				default:
@@ -86,7 +87,8 @@ func (c *PunchPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 			return n, addr, nil
 		}
 		matched := false
-		from, addressOK := addrToAddrPort(addr)
+		from := M.SocksaddrFromNet(addr).Unwrap().AddrPort()
+		addressOK := from.IsValid()
 		for attemptID, metadata := range c.attempts {
 			packetType, decodeErr := DecodePunchPacket(data, metadata)
 			if decodeErr != nil {
