@@ -81,25 +81,11 @@ func NewServer(options Options) (*Server, error) {
 func (s *Server) Start(ctx context.Context, conn net.PacketConn) (*PunchPacketConn, error) {
 	punchConn := NewPunchPacketConn(conn, eventBufferSize)
 	s.punchConn = punchConn
-	addresses, err := Discover(ctx, conn, s.options.STUNServers, s.options.Resolver)
-	if err != nil {
-		return nil, E.Cause(err, "initial STUN discovery")
-	}
-	s.addresses = addresses
-	s.addressesAt = time.Now()
-	s.options.Logger.Info("STUN discovery complete, addresses: ", addresses)
-	registration, err := s.controlClient.Register(ctx, s.options.RealmID, addresses)
-	if err != nil {
-		return nil, E.Cause(err, "register with control")
-	}
-	s.sessionID = registration.SessionID
-	s.ttl = registration.TTL
-	s.lastPublishedAddresses = slices.Clone(addresses)
-	s.options.Logger.Info("registered with control, session: ", registration.SessionID, ", TTL: ", registration.TTL, "s")
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.puncher = NewServerPuncher(runCtx, punchConn)
 	go s.run(runCtx)
+	s.Reset()
 	return punchConn, nil
 }
 
@@ -196,7 +182,7 @@ func (s *Server) openEventStream(ctx context.Context, streamDone chan struct{}) 
 	sessionID := s.sessionID
 	s.sessionAccess.Unlock()
 	if sessionID == "" {
-		s.options.Logger.Error("no session ID, cannot open event stream")
+		s.options.Logger.Debug("no session ID, deferring event stream")
 		close(streamDone)
 		return false
 	}
@@ -302,6 +288,12 @@ func (s *Server) handleHeartbeat(ctx context.Context) {
 	sessionID := s.sessionID
 	s.sessionAccess.Unlock()
 	if sessionID == "" {
+		s.addressAccess.RLock()
+		haveAddresses := len(s.addresses) > 0
+		s.addressAccess.RUnlock()
+		if haveAddresses {
+			s.reRegister(ctx)
+		}
 		return
 	}
 	s.addressAccess.RLock()
@@ -349,7 +341,14 @@ func (s *Server) handleReset(ctx context.Context) {
 	s.addressAccess.Unlock()
 	_, err := s.connectAddresses(ctx)
 	if err != nil {
-		s.options.Logger.Error(E.Cause(err, "STUN re-discovery on reset"))
+		s.options.Logger.Warn(E.Cause(err, "STUN re-discovery on reset"))
+		return
+	}
+	s.sessionAccess.Lock()
+	haveSession := s.sessionID != ""
+	s.sessionAccess.Unlock()
+	if !haveSession {
+		s.reRegister(ctx)
 		return
 	}
 	s.handleHeartbeat(ctx)
@@ -361,7 +360,7 @@ func (s *Server) reRegister(ctx context.Context) {
 	s.addressAccess.RUnlock()
 	registration, err := s.controlClient.Register(ctx, s.options.RealmID, addresses)
 	if err != nil {
-		s.options.Logger.Error(E.Cause(err, "re-register"))
+		s.options.Logger.Warn(E.Cause(err, "re-register"))
 		return
 	}
 	s.sessionAccess.Lock()
