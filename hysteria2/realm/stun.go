@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/metacubex/sing-quic/hysteria2/internal/stun"
+	"github.com/metacubex/sing/common/batch"
 	E "github.com/metacubex/sing/common/exceptions"
 	M "github.com/metacubex/sing/common/metadata"
 )
@@ -16,36 +17,47 @@ func resolveSTUNServers(ctx context.Context, servers []string, resolver Resolver
 	if resolver == nil {
 		return nil, E.New("realm: resolver is required")
 	}
+	group, ctx := batch.New[[]netip.AddrPort](ctx)
+	for i, server := range servers {
+		group.Go(strconv.Itoa(i), func() ([]netip.AddrPort, error) {
+			host, port, err := net.SplitHostPort(server)
+			if err != nil {
+				host = server
+				port = "3478"
+			}
+			portNumber, err := strconv.ParseUint(port, 10, 16)
+			if err != nil {
+				return nil, E.Cause(err, "resolve STUN port: ", port)
+			}
+			addr, parseErr := netip.ParseAddr(host)
+			if parseErr == nil {
+				addr = addr.Unmap()
+				if addr.Is4() && !ipv4 {
+					return nil, nil
+				}
+				if !addr.Is4() && !ipv6 {
+					return nil, nil
+				}
+				return []netip.AddrPort{netip.AddrPortFrom(addr, uint16(portNumber))}, nil
+			}
+			addresses, err := resolver(ctx, host, ipv4, ipv6)
+			if err != nil {
+				return nil, E.Cause(err, "resolve STUN server: ", server)
+			}
+			entries := make([]netip.AddrPort, 0, len(addresses))
+			for _, address := range addresses {
+				entries = append(entries, netip.AddrPortFrom(address, uint16(portNumber)))
+			}
+			return entries, nil
+		})
+	}
+	results, groupErr := group.WaitAndGetResult()
+	if groupErr != nil {
+		return nil, groupErr.Err
+	}
 	var resolved []netip.AddrPort
-	for _, server := range servers {
-		host, port, err := net.SplitHostPort(server)
-		if err != nil {
-			host = server
-			port = "3478"
-		}
-		portNumber, err := strconv.ParseUint(port, 10, 16)
-		if err != nil {
-			return nil, E.Cause(err, "resolve STUN port: ", port)
-		}
-		addr, parseErr := netip.ParseAddr(host)
-		if parseErr == nil {
-			addr = addr.Unmap()
-			if addr.Is4() && !ipv4 {
-				continue
-			}
-			if !addr.Is4() && !ipv6 {
-				continue
-			}
-			resolved = append(resolved, netip.AddrPortFrom(addr, uint16(portNumber)))
-			continue
-		}
-		addresses, err := resolver(ctx, host, ipv4, ipv6)
-		if err != nil {
-			return nil, E.Cause(err, "resolve STUN server: ", server)
-		}
-		for _, address := range addresses {
-			resolved = append(resolved, netip.AddrPortFrom(address, uint16(portNumber)))
-		}
+	for i := range servers {
+		resolved = append(resolved, results[strconv.Itoa(i)].Value...)
 	}
 	if len(resolved) == 0 {
 		return nil, E.New("no STUN servers resolved")
