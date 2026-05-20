@@ -250,6 +250,18 @@ func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.Pack
 	if err != nil {
 		return nil, err
 	}
+	// A QuicDialer must return a non-nil connection whenever it returns a nil
+	// error. Some implementations can violate this contract (e.g. an inner
+	// QUIC dial racing connection teardown returns (nil, nil)). Without this
+	// guard the nil quicConn is captured by the http3.Transport Dial closure
+	// below and later dereferenced in http3.newClientConn (conn.QlogTrace()),
+	// crashing the whole process with a nil-pointer panic.
+	if quicConn == nil {
+		if packetConn != nil {
+			_ = packetConn.Close()
+		}
+		return nil, E.New("hysteria2: QUIC dialer returned a nil connection without an error")
+	}
 
 	http3Transport := &http3.Transport{
 		TLSClientConfig: c.tlsConfig,
