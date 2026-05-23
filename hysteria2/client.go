@@ -255,6 +255,7 @@ func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, err
 	listenErrs := make([]error, len(specs))
 	var wg sync.WaitGroup
 	for i, spec := range specs {
+		i, spec := i, spec
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -290,6 +291,7 @@ func (c *Client) realmDiscoverFamilies(ctx context.Context, families []*realmFam
 	results := make([]discoverResult, len(families))
 	var wg sync.WaitGroup
 	for i, family := range families {
+		i, family := i, family
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -333,6 +335,7 @@ func (c *Client) realmRacePunch(
 	}
 	out := make(chan outcome, len(families))
 	for _, family := range families {
+		family := family
 		go func() {
 			punchResult, punchErr := realm.Punch(raceCtx, family.conn, family.localAddresses, peerAddresses, metadata)
 			out <- outcome{family: family, result: punchResult, err: punchErr}
