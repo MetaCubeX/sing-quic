@@ -201,36 +201,160 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 	return c.authenticateAndWrap(ctx, c.packetDialer, serverAddr)
 }
 
+type realmFamilyConn struct {
+	family         string
+	conn           net.PacketConn
+	localAddresses []netip.AddrPort
+}
+
 func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, error) {
-	rawConn, err := c.packetDialer.ListenPacket(ctx, "udp", "", netip.AddrPort{})
+	families, err := c.realmOpenFamilies(ctx)
 	if err != nil {
-		return nil, E.Cause(err, "listen UDP for realm")
+		return nil, err
 	}
-	localAddresses, err := realm.Discover(ctx, rawConn, c.realmOptions.STUNServers, c.realmOptions.Resolver)
+	surviving, localAddresses, err := c.realmDiscoverFamilies(ctx, families)
 	if err != nil {
-		rawConn.Close()
-		return nil, E.Cause(err, "realm STUN discovery")
+		return nil, err
+	}
+	closeSurviving := func() {
+		for _, family := range surviving {
+			_ = family.conn.Close()
+		}
 	}
 	localMetadata, err := realm.GeneratePunchMetadata()
 	if err != nil {
-		rawConn.Close()
+		closeSurviving()
 		return nil, E.Cause(err, "generate punch metadata")
 	}
 	response, err := c.controlClient.Connect(ctx, c.realmOptions.RealmID, localAddresses, localMetadata)
 	if err != nil {
-		rawConn.Close()
+		closeSurviving()
 		return nil, E.Cause(err, "realm connect")
 	}
-	result, err := realm.Punch(ctx, rawConn, localAddresses, response.Addresses, response.PunchMetadata)
+	winner, result, err := c.realmRacePunch(ctx, surviving, response.Addresses, response.PunchMetadata)
 	if err != nil {
-		rawConn.Close()
-		return nil, E.Cause(err, "realm punch")
+		return nil, err
 	}
+	packetConn := winner.conn
 	peerAddr := M.SocksaddrFromNetIP(result.PeerAddr)
 	packetDialer := qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
-		return rawConn, nil
+		return packetConn, nil
 	})
 	return c.authenticateAndWrap(ctx, packetDialer, peerAddr)
+}
+
+func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, error) {
+	specs := []struct {
+		family string
+		addr   M.Socksaddr
+	}{
+		{"v4", M.SocksaddrFrom(netip.IPv4Unspecified(), 0)},
+		{"v6", M.SocksaddrFrom(netip.IPv6Unspecified(), 0)},
+	}
+	conns := make([]*realmFamilyConn, len(specs))
+	listenErrs := make([]error, len(specs))
+	var wg sync.WaitGroup
+	for i, spec := range specs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, listenErr := c.packetDialer.ListenPacket(ctx, "udp", "", spec.addr.AddrPort())
+			if listenErr != nil {
+				listenErrs[i] = E.Cause(listenErr, spec.family)
+				return
+			}
+			conns[i] = &realmFamilyConn{family: spec.family, conn: conn}
+		}()
+	}
+	wg.Wait()
+	var families []*realmFamilyConn
+	var errs []error
+	for i, family := range conns {
+		if family != nil {
+			families = append(families, family)
+			continue
+		}
+		errs = append(errs, listenErrs[i])
+	}
+	if len(families) == 0 {
+		return nil, E.Cause(E.Errors(errs...), "listen UDP for realm")
+	}
+	return families, nil
+}
+
+func (c *Client) realmDiscoverFamilies(ctx context.Context, families []*realmFamilyConn) ([]*realmFamilyConn, []netip.AddrPort, error) {
+	type discoverResult struct {
+		addrs []netip.AddrPort
+		err   error
+	}
+	results := make([]discoverResult, len(families))
+	var wg sync.WaitGroup
+	for i, family := range families {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			addrs, discoverErr := realm.Discover(ctx, family.conn, c.realmOptions.STUNServers, c.realmOptions.Resolver)
+			results[i] = discoverResult{addrs: addrs, err: discoverErr}
+		}()
+	}
+	wg.Wait()
+	var surviving []*realmFamilyConn
+	var union []netip.AddrPort
+	var errs []error
+	for i, family := range families {
+		result := results[i]
+		if result.err != nil {
+			errs = append(errs, E.Cause(result.err, family.family))
+			_ = family.conn.Close()
+			continue
+		}
+		family.localAddresses = result.addrs
+		surviving = append(surviving, family)
+		union = append(union, result.addrs...)
+	}
+	if len(surviving) == 0 {
+		return nil, nil, E.Cause(E.Errors(errs...), "realm STUN discovery")
+	}
+	return surviving, union, nil
+}
+
+func (c *Client) realmRacePunch(
+	ctx context.Context,
+	families []*realmFamilyConn,
+	peerAddresses []netip.AddrPort,
+	metadata realm.PunchMetadata,
+) (*realmFamilyConn, realm.PunchResult, error) {
+	raceCtx, raceCancel := context.WithCancel(ctx)
+	defer raceCancel()
+	type outcome struct {
+		family *realmFamilyConn
+		result realm.PunchResult
+		err    error
+	}
+	out := make(chan outcome, len(families))
+	for _, family := range families {
+		go func() {
+			punchResult, punchErr := realm.Punch(raceCtx, family.conn, family.localAddresses, peerAddresses, metadata)
+			out <- outcome{family: family, result: punchResult, err: punchErr}
+		}()
+	}
+	var errs []error
+	for pending := len(families); pending > 0; pending-- {
+		result := <-out
+		if result.err == nil {
+			for _, family := range families {
+				if family != result.family {
+					_ = family.conn.Close()
+				}
+			}
+			return result.family, result.result, nil
+		}
+		errs = append(errs, E.Cause(result.err, result.family.family))
+	}
+	for _, family := range families {
+		_ = family.conn.Close()
+	}
+	return nil, realm.PunchResult{}, E.Cause(E.Errors(errs...), "realm punch")
 }
 
 func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.PacketDialer, serverAddr M.Socksaddr) (*clientQUICConnection, error) {
