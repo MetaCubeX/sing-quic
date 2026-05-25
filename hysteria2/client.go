@@ -203,6 +203,7 @@ func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
 
 type realmFamilyConn struct {
 	family         string
+	ipv4           bool
 	conn           net.PacketConn
 	localAddresses []netip.AddrPort
 }
@@ -246,10 +247,11 @@ func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, erro
 func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, error) {
 	specs := []struct {
 		family string
+		ipv4   bool
 		addr   M.Socksaddr
 	}{
-		{"v4", M.SocksaddrFrom(netip.IPv4Unspecified(), 0)},
-		{"v6", M.SocksaddrFrom(netip.IPv6Unspecified(), 0)},
+		{"v4", true, M.SocksaddrFrom(netip.IPv4Unspecified(), 0)},
+		{"v6", false, M.SocksaddrFrom(netip.IPv6Unspecified(), 0)},
 	}
 	conns := make([]*realmFamilyConn, len(specs))
 	listenErrs := make([]error, len(specs))
@@ -264,7 +266,7 @@ func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, err
 				listenErrs[i] = E.Cause(listenErr, spec.family)
 				return
 			}
-			conns[i] = &realmFamilyConn{family: spec.family, conn: conn}
+			conns[i] = &realmFamilyConn{family: spec.family, ipv4: spec.ipv4, conn: conn}
 		}()
 	}
 	wg.Wait()
@@ -284,6 +286,21 @@ func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, err
 }
 
 func (c *Client) realmDiscoverFamilies(ctx context.Context, families []*realmFamilyConn) ([]*realmFamilyConn, []netip.AddrPort, error) {
+	var needIPv4, needIPv6 bool
+	for _, family := range families {
+		if family.ipv4 {
+			needIPv4 = true
+		} else {
+			needIPv6 = true
+		}
+	}
+	stunServers, err := realm.ResolveSTUNServers(ctx, c.realmOptions.STUNServers, c.realmOptions.Resolver, needIPv4, needIPv6)
+	if err != nil {
+		for _, family := range families {
+			_ = family.conn.Close()
+		}
+		return nil, nil, E.Cause(err, "resolve STUN servers")
+	}
 	type discoverResult struct {
 		addrs []netip.AddrPort
 		err   error
@@ -295,7 +312,13 @@ func (c *Client) realmDiscoverFamilies(ctx context.Context, families []*realmFam
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			addrs, discoverErr := realm.Discover(ctx, family.conn, c.realmOptions.STUNServers, c.realmOptions.Resolver)
+			servers := make([]netip.AddrPort, 0, len(stunServers))
+			for _, server := range stunServers {
+				if server.Addr().Is4() == family.ipv4 {
+					servers = append(servers, server)
+				}
+			}
+			addrs, discoverErr := realm.Discover(ctx, family.conn, servers)
 			results[i] = discoverResult{addrs: addrs, err: discoverErr}
 		}()
 	}
@@ -337,7 +360,13 @@ func (c *Client) realmRacePunch(
 	for _, family := range families {
 		family := family
 		go func() {
-			punchResult, punchErr := realm.Punch(raceCtx, family.conn, family.localAddresses, peerAddresses, metadata)
+			peers := make([]netip.AddrPort, 0, len(peerAddresses))
+			for _, peer := range peerAddresses {
+				if peer.Addr().Is4() == family.ipv4 {
+					peers = append(peers, peer)
+				}
+			}
+			punchResult, punchErr := realm.Punch(raceCtx, family.conn, peers, metadata)
 			out <- outcome{family: family, result: punchResult, err: punchErr}
 		}()
 	}

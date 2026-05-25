@@ -10,10 +10,9 @@ import (
 	"github.com/metacubex/sing-quic/hysteria2/internal/stun"
 	"github.com/metacubex/sing/common/batch"
 	E "github.com/metacubex/sing/common/exceptions"
-	M "github.com/metacubex/sing/common/metadata"
 )
 
-func resolveSTUNServers(ctx context.Context, servers []string, resolver Resolver, ipv4, ipv6 bool) ([]netip.AddrPort, error) {
+func ResolveSTUNServers(ctx context.Context, servers []string, resolver Resolver, ipv4, ipv6 bool) ([]netip.AddrPort, error) {
 	if resolver == nil {
 		return nil, E.New("realm: resolver is required")
 	}
@@ -71,12 +70,11 @@ type stunRequest struct {
 	transactionID stun.TransactionID
 }
 
-func Discover(ctx context.Context, conn net.PacketConn, servers []string, resolver Resolver) ([]netip.AddrPort, error) {
-	resolved, err := resolveForConn(ctx, conn, servers, resolver)
-	if err != nil {
-		return nil, err
+func Discover(ctx context.Context, conn net.PacketConn, servers []netip.AddrPort) ([]netip.AddrPort, error) {
+	if len(servers) == 0 {
+		return nil, E.New("no STUN servers")
 	}
-	requests, err := buildSTUNRequests(resolved)
+	requests, err := buildSTUNRequests(servers)
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +116,11 @@ func Discover(ctx context.Context, conn net.PacketConn, servers []string, resolv
 	return runDiscoveryAttempts(ctx, conn, requests, runAttempt)
 }
 
-func DiscoverDemuxed(ctx context.Context, conn *PunchPacketConn, servers []string, resolver Resolver) ([]netip.AddrPort, error) {
-	resolved, err := resolveForConn(ctx, conn, servers, resolver)
-	if err != nil {
-		return nil, err
+func DiscoverDemuxed(ctx context.Context, conn *PunchPacketConn, servers []netip.AddrPort) ([]netip.AddrPort, error) {
+	if len(servers) == 0 {
+		return nil, E.New("no STUN servers")
 	}
-	requests, err := buildSTUNRequests(resolved)
+	requests, err := buildSTUNRequests(servers)
 	if err != nil {
 		return nil, err
 	}
@@ -154,21 +151,6 @@ func DiscoverDemuxed(ctx context.Context, conn *PunchPacketConn, servers []strin
 		return addresses, nil
 	}
 	return runDiscoveryAttempts(ctx, conn, requests, runAttempt)
-}
-
-func resolveForConn(ctx context.Context, conn net.PacketConn, servers []string, resolver Resolver) ([]netip.AddrPort, error) {
-	var ipv4, ipv6 bool
-	localAddrPort := M.SocksaddrFromNet(conn.LocalAddr()).Unwrap().AddrPort()
-	switch {
-	case !localAddrPort.IsValid() || localAddrPort.Addr().IsUnspecified():
-		ipv4 = true
-		ipv6 = true
-	case localAddrPort.Addr().Is4():
-		ipv4 = true
-	default:
-		ipv6 = true
-	}
-	return resolveSTUNServers(ctx, servers, resolver, ipv4, ipv6)
 }
 
 func buildSTUNRequests(servers []netip.AddrPort) ([]stunRequest, error) {

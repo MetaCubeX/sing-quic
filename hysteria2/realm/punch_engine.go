@@ -27,8 +27,8 @@ type PunchResult struct {
 	Type     byte
 }
 
-func Punch(ctx context.Context, conn net.PacketConn, localAddresses []netip.AddrPort, peerAddresses []netip.AddrPort, metadata PunchMetadata) (PunchResult, error) {
-	candidates := candidatePunchAddrs(localAddresses, peerAddresses, conn.LocalAddr())
+func Punch(ctx context.Context, conn net.PacketConn, peerAddresses []netip.AddrPort, metadata PunchMetadata) (PunchResult, error) {
+	candidates := candidatePunchAddrs(peerAddresses)
 	if len(candidates) == 0 {
 		return PunchResult{}, E.New("no compatible peer addresses")
 	}
@@ -117,8 +117,8 @@ func (p *ServerPuncher) dispatch(ctx context.Context) {
 	}
 }
 
-func (p *ServerPuncher) Respond(ctx context.Context, attemptID string, localAddresses []netip.AddrPort, peerAddresses []netip.AddrPort, metadata PunchMetadata) (PunchResult, error) {
-	candidates := candidatePunchAddrs(localAddresses, peerAddresses, p.conn.LocalAddr())
+func (p *ServerPuncher) Respond(ctx context.Context, attemptID string, peerAddresses []netip.AddrPort, metadata PunchMetadata) (PunchResult, error) {
+	candidates := candidatePunchAddrs(peerAddresses)
 	if len(candidates) == 0 {
 		return PunchResult{}, E.New("no compatible peer addresses")
 	}
@@ -173,40 +173,11 @@ func sendPunchPacket(conn net.PacketConn, address netip.AddrPort, packetType byt
 	_, _ = conn.WriteTo(packet, net.UDPAddrFromAddrPort(address))
 }
 
-func candidatePunchAddrs(localAddresses, peerAddresses []netip.AddrPort, connAddr net.Addr) []netip.AddrPort {
-	var allowV4, allowV6 bool
-	for _, address := range localAddresses {
-		if !address.IsValid() {
-			continue
-		}
-		if address.Addr().Is4() {
-			allowV4 = true
-		} else if address.Addr().Is6() {
-			allowV6 = true
-		}
-	}
-	if !allowV4 && !allowV6 {
-		localAddrPort := M.SocksaddrFromNet(connAddr).Unwrap().AddrPort()
-		switch {
-		case !localAddrPort.IsValid() || localAddrPort.Addr().IsUnspecified():
-			allowV4 = true
-			allowV6 = true
-		case localAddrPort.Addr().Is4():
-			allowV4 = true
-		default:
-			allowV6 = true
-		}
-	}
+func candidatePunchAddrs(peerAddresses []netip.AddrPort) []netip.AddrPort {
 	seen := make(map[netip.AddrPort]struct{})
 	var candidates []netip.AddrPort
 	for _, address := range peerAddresses {
 		if !address.IsValid() || address.Port() == 0 {
-			continue
-		}
-		if address.Addr().Is4() && !allowV4 {
-			continue
-		}
-		if address.Addr().Is6() && !allowV6 {
 			continue
 		}
 		_, exists := seen[address]

@@ -51,6 +51,9 @@ type Server struct {
 	lastPublishedAddresses []netip.AddrPort
 	connectFlight          singleflight.Group
 
+	stunServerAccess sync.Mutex
+	stunServers      []netip.AddrPort
+
 	sessionAccess sync.Mutex
 	sessionID     string
 	ttl           int
@@ -230,7 +233,7 @@ func (s *Server) readEvents(ctx context.Context, stream *EventStream, streamDone
 					s.options.Logger.Warn(E.Cause(postErr, "connect response post"))
 				}
 			}
-			result, punchErr := s.puncher.Respond(ctx, generateAttemptID(), freshAddresses, peerAddresses, metadata)
+			result, punchErr := s.puncher.Respond(ctx, generateAttemptID(), peerAddresses, metadata)
 			if punchErr != nil {
 				if !E.IsClosedOrCanceled(punchErr) {
 					s.options.Logger.Error(E.Cause(punchErr, "punch respond"))
@@ -251,6 +254,20 @@ func (s *Server) cachedAddresses() []netip.AddrPort {
 	return slices.Clone(s.addresses)
 }
 
+func (s *Server) resolvedSTUNServers(ctx context.Context) ([]netip.AddrPort, error) {
+	s.stunServerAccess.Lock()
+	defer s.stunServerAccess.Unlock()
+	if s.stunServers != nil {
+		return s.stunServers, nil
+	}
+	resolved, err := ResolveSTUNServers(ctx, s.options.STUNServers, s.options.Resolver, true, true)
+	if err != nil {
+		return nil, err
+	}
+	s.stunServers = resolved
+	return resolved, nil
+}
+
 func (s *Server) connectAddresses(ctx context.Context) ([]netip.AddrPort, error) {
 	cached := s.cachedAddresses()
 	if cached != nil {
@@ -261,7 +278,11 @@ func (s *Server) connectAddresses(ctx context.Context) ([]netip.AddrPort, error)
 		if recheck != nil {
 			return recheck, nil
 		}
-		fresh, discoverErr := DiscoverDemuxed(ctx, s.punchConn, s.options.STUNServers, s.options.Resolver)
+		servers, resolveErr := s.resolvedSTUNServers(ctx)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		fresh, discoverErr := DiscoverDemuxed(ctx, s.punchConn, servers)
 		if discoverErr != nil {
 			return nil, discoverErr
 		}
