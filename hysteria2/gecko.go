@@ -3,12 +3,12 @@ package hysteria2
 import (
 	"crypto/rand"
 	"encoding/binary"
-	rand2 "math/rand/v2"
 	"net"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	rand2 "github.com/metacubex/randv2"
 )
 
 const ObfsTypeGecko = "gecko"
@@ -202,7 +202,10 @@ func (g *GeckoPacketConn) acceptChunk(addr net.Addr, msgID, chunkIdx, totalChunk
 	if entry.received < int(entry.total) {
 		return nil, false
 	}
-	out := slices.Concat(entry.chunks...)
+	var out []byte
+	for _, chunk := range entry.chunks {
+		out = append(out, chunk...)
+	}
 	g.dropEntryLocked(key)
 	return out, true
 }
