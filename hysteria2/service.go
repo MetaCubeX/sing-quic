@@ -34,6 +34,9 @@ type ServiceOptions struct {
 	ReceiveBPS            uint64
 	IgnoreClientBandwidth bool
 	SalamanderPassword    string
+	GeckoPassword         string
+	GeckoMinPacketSize    int
+	GeckoMaxPacketSize    int
 	TLSConfig             *tls.Config
 	QUICConfig            *quic.Config
 	UDPDisabled           bool
@@ -58,6 +61,9 @@ type Service[U comparable] struct {
 	receiveBPS            uint64
 	ignoreClientBandwidth bool
 	salamanderPassword    string
+	geckoPassword         string
+	geckoMinPacketSize    int
+	geckoMaxPacketSize    int
 	tlsConfig             *tls.Config
 	quicConfig            *quic.Config
 	userMap               map[string]U
@@ -106,6 +112,17 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 	if len(options.TLSConfig.NextProtos) == 0 {
 		options.TLSConfig.NextProtos = []string{http3.NextProtoH3}
 	}
+	if options.GeckoPassword != "" {
+		if options.GeckoMinPacketSize == 0 {
+			options.GeckoMinPacketSize = geckoDefaultMinPacketSize
+		}
+		if options.GeckoMaxPacketSize == 0 {
+			options.GeckoMaxPacketSize = geckoDefaultMaxPacketSize
+		}
+		if options.GeckoMinPacketSize <= 0 || options.GeckoMinPacketSize > options.GeckoMaxPacketSize || options.GeckoMaxPacketSize > geckoMaxOnWireSize {
+			return nil, E.New("gecko: invalid packet size range")
+		}
+	}
 	var realmServer *realm.Server
 	if options.RealmOptions != nil {
 		var err error
@@ -122,6 +139,9 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 		receiveBPS:            options.ReceiveBPS,
 		ignoreClientBandwidth: options.IgnoreClientBandwidth,
 		salamanderPassword:    options.SalamanderPassword,
+		geckoPassword:         options.GeckoPassword,
+		geckoMinPacketSize:    options.GeckoMinPacketSize,
+		geckoMaxPacketSize:    options.GeckoMaxPacketSize,
 		tlsConfig:             options.TLSConfig,
 		quicConfig:            quicConfig,
 		userMap:               make(map[string]U),
@@ -147,7 +167,9 @@ func (s *Service[U]) Start(conn net.PacketConn) error {
 	if s.realmServer != nil {
 		return s.startWithRealm(conn)
 	}
-	if s.salamanderPassword != "" {
+	if s.geckoPassword != "" {
+		conn = NewGeckoConn(conn, []byte(s.geckoPassword), s.geckoMinPacketSize, s.geckoMaxPacketSize)
+	} else if s.salamanderPassword != "" {
 		conn = NewSalamanderConn(conn, []byte(s.salamanderPassword))
 	}
 	listener, err := quic.Listen(conn, s.tlsConfig, s.quicConfig)
@@ -165,7 +187,9 @@ func (s *Service[U]) startWithRealm(conn net.PacketConn) error {
 		return E.Cause(err, "start realm server")
 	}
 	var quicConn net.PacketConn = punchConn
-	if s.salamanderPassword != "" {
+	if s.geckoPassword != "" {
+		quicConn = NewGeckoConn(quicConn, []byte(s.geckoPassword), s.geckoMinPacketSize, s.geckoMaxPacketSize)
+	} else if s.salamanderPassword != "" {
 		quicConn = NewSalamanderConn(quicConn, []byte(s.salamanderPassword))
 	}
 	listener, err := quic.Listen(quicConn, s.tlsConfig, s.quicConfig)

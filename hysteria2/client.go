@@ -39,6 +39,9 @@ type ClientOptions struct {
 	SendBPS            uint64
 	ReceiveBPS         uint64
 	SalamanderPassword string
+	GeckoPassword      string
+	GeckoMinPacketSize int
+	GeckoMaxPacketSize int
 	Password           string
 	TLSConfig          *tls.Config
 	QUICConfig         *quic.Config
@@ -61,6 +64,9 @@ type Client struct {
 	sendBPS            uint64
 	receiveBPS         uint64
 	salamanderPassword string
+	geckoPassword      string
+	geckoMinPacketSize int
+	geckoMaxPacketSize int
 	password           string
 	tlsConfig          *tls.Config
 	quicConfig         *quic.Config
@@ -106,6 +112,17 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if options.RealmOptions != nil && len(options.ServerPorts) > 0 {
 		return nil, E.New("realm and port hopping are mutually exclusive")
 	}
+	if options.GeckoPassword != "" {
+		if options.GeckoMinPacketSize == 0 {
+			options.GeckoMinPacketSize = geckoDefaultMinPacketSize
+		}
+		if options.GeckoMaxPacketSize == 0 {
+			options.GeckoMaxPacketSize = geckoDefaultMaxPacketSize
+		}
+		if options.GeckoMinPacketSize <= 0 || options.GeckoMinPacketSize > options.GeckoMaxPacketSize || options.GeckoMaxPacketSize > geckoMaxOnWireSize {
+			return nil, E.New("gecko: invalid packet size range")
+		}
+	}
 	var controlClient *realm.ControlClient
 	if options.RealmOptions != nil {
 		var err error
@@ -127,6 +144,9 @@ func NewClient(options ClientOptions) (*Client, error) {
 		sendBPS:            options.SendBPS,
 		receiveBPS:         options.ReceiveBPS,
 		salamanderPassword: options.SalamanderPassword,
+		geckoPassword:      options.GeckoPassword,
+		geckoMinPacketSize: options.GeckoMinPacketSize,
+		geckoMaxPacketSize: options.GeckoMaxPacketSize,
 		password:           options.Password,
 		tlsConfig:          options.TLSConfig,
 		quicConfig:         quicConfig,
@@ -390,17 +410,19 @@ func (c *Client) realmRacePunch(
 }
 
 func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.PacketDialer, serverAddr M.Socksaddr) (*clientQUICConnection, error) {
-	if c.salamanderPassword != "" {
-		_packetDialer := packetDialer // make a copy
-		packetDialer = qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
-			pc, err := _packetDialer.ListenPacket(ctx, network, address, rAddrPort)
-			if err != nil {
-				return nil, err
-			}
+	_packetDialer := packetDialer // make a copy
+	packetDialer = qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
+		pc, err := _packetDialer.ListenPacket(ctx, network, address, rAddrPort)
+		if err != nil {
+			return nil, err
+		}
+		if c.geckoPassword != "" {
+			pc = NewGeckoConn(pc, []byte(c.geckoPassword), c.geckoMinPacketSize, c.geckoMaxPacketSize)
+		} else if c.salamanderPassword != "" {
 			pc = NewSalamanderConn(pc, []byte(c.salamanderPassword))
-			return pc, nil
-		})
-	}
+		}
+		return pc, nil
+	})
 
 	packetConn, quicConn, err := c.quicDialer.DialContext(ctx, serverAddr.String(), packetDialer, c.tlsConfig, c.quicConfig, true)
 	if err != nil {
