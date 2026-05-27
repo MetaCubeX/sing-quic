@@ -18,6 +18,7 @@ func ResolveSTUNServers(ctx context.Context, servers []string, resolver Resolver
 	}
 	group, ctx := batch.New[[]netip.AddrPort](ctx)
 	for i, server := range servers {
+		i, server := i, server
 		group.Go(strconv.Itoa(i), func() ([]netip.AddrPort, error) {
 			host, port, err := net.SplitHostPort(server)
 			if err != nil {
