@@ -159,55 +159,17 @@ func NewClient(options ClientOptions) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) nextHopInterval() time.Duration {
-	if c.hopInterval >= c.hopIntervalMax {
-		return c.hopInterval
-	}
-	return c.hopInterval + time.Duration(randv2.Int64N(int64(c.hopIntervalMax-c.hopInterval)+1))
-}
-
-func (c *Client) hopLoop(conn *clientQUICConnection) {
-	timer := time.NewTimer(c.nextHopInterval())
-	defer timer.Stop()
-	c.logger.Debug("Entering hop loop ...")
-	remoteAddr, ok := conn.quicConn.RemoteAddr().(*net.UDPAddr)
-	if !ok || remoteAddr == nil {
-		c.logger.Error("Failed to get remote address for hop", remoteAddr)
-		return
-	}
-	for {
-		select {
-		case <-timer.C:
-			targetAddr := *remoteAddr                                             // make a copy
-			targetAddr.Port = int(c.serverPorts[randv2.IntN(len(c.serverPorts))]) // only change port
-			conn.quicConn.SetRemoteAddr(&targetAddr)
-			c.logger.Debug("Hopped to ", &targetAddr)
-			timer.Reset(c.nextHopInterval())
-			continue
-		case <-c.ctx.Done():
-		case <-conn.quicConn.Context().Done():
-		case <-conn.connDone:
-		}
-		c.logger.Debug("Exiting hop loop ...")
-		return
-	}
-}
-
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 	c.connAccess.Lock()
 	defer c.connAccess.Unlock()
-	if c.connErr != nil {
-		return nil, c.connErr
+
+	if c.conn != nil && c.conn.active() {
+		return c.conn, nil
 	}
-	conn := c.conn
-	if conn != nil && conn.active() {
-		return conn, nil
-	}
-	conn, err := c.offerNew(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	c.connErr = nil
+	c.conn = nil
+
+	return c.offerNew(ctx)
 }
 
 func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
@@ -229,11 +191,17 @@ type realmFamilyConn struct {
 }
 
 func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, error) {
-	families, err := c.realmOpenFamilies(ctx)
+	// Create an independent context for the realm flow. The caller's context
+	// may have a short deadline (e.g. 5s) which is insufficient for the
+	// realm flow: STUN discovery (~6.5s) + HTTP control connect + QUIC auth.
+	realmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	families, err := c.realmOpenFamilies(realmCtx)
 	if err != nil {
 		return nil, err
 	}
-	surviving, localAddresses, err := c.realmDiscoverFamilies(ctx, families)
+	surviving, localAddresses, err := c.realmDiscoverFamilies(realmCtx, families)
 	if err != nil {
 		return nil, err
 	}
@@ -247,12 +215,12 @@ func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, erro
 		closeSurviving()
 		return nil, E.Cause(err, "generate punch metadata")
 	}
-	response, err := c.controlClient.Connect(ctx, c.realmOptions.RealmID, localAddresses, localMetadata)
+	response, err := c.controlClient.Connect(realmCtx, c.realmOptions.RealmID, localAddresses, localMetadata)
 	if err != nil {
 		closeSurviving()
 		return nil, E.Cause(err, "realm connect")
 	}
-	winner, result, err := c.realmRacePunch(ctx, surviving, response.Addresses, response.PunchMetadata)
+	winner, result, err := c.realmRacePunch(realmCtx, surviving, response.Addresses, response.PunchMetadata)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +229,7 @@ func (c *Client) offerNewRealm(ctx context.Context) (*clientQUICConnection, erro
 	packetDialer := qtls.PacketDialerFunc(func(ctx context.Context, network, address string, rAddrPort netip.AddrPort) (net.PacketConn, error) {
 		return packetConn, nil
 	})
-	return c.authenticateAndWrap(ctx, packetDialer, peerAddr)
+	return c.authenticateAndWrap(realmCtx, packetDialer, peerAddr)
 }
 
 func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, error) {
