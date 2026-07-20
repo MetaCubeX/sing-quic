@@ -19,6 +19,7 @@ import (
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
 	"github.com/metacubex/sing-quic/hysteria2/realm"
+	"github.com/metacubex/sing/common"
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/sing/common/logger"
 	M "github.com/metacubex/sing/common/metadata"
@@ -79,6 +80,7 @@ type Client struct {
 
 	connAccess sync.Mutex
 	conn       *clientQUICConnection
+	pending    *clientOffer
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
@@ -195,16 +197,77 @@ func (c *Client) hopLoop(conn *clientQUICConnection) {
 
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 	c.connAccess.Lock()
-	defer c.connAccess.Unlock()
 	conn := c.conn
 	if conn != nil && conn.active() {
+		c.connAccess.Unlock()
 		return conn, nil
 	}
-	conn, err := c.offerNew(ctx)
-	if err != nil {
-		return nil, err
+	pending := c.pending
+	if pending != nil {
+		c.connAccess.Unlock()
+		select {
+		case <-pending.done:
+			return pending.conn, pending.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	return conn, nil
+	// A pending offer is shared by concurrent callers. Do not derive offerCtx
+	// from the foreground request ctx: a timed-out request must stop waiting for
+	// the shared result, but it must not tear down the background QUIC dial that
+	// may still be reused by later requests. The connection attempt is owned by
+	// the client lifetime context instead.
+	offerCtx := c.ctx
+	if offerCtx == nil {
+		offerCtx = context.Background()
+	}
+	offerCtx, cancel := common.ContextWithCancelCause(offerCtx)
+	pending = &clientOffer{
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
+	c.pending = pending
+	c.connAccess.Unlock()
+
+	go c.completeOffer(pending, offerCtx)
+
+	select {
+	case <-pending.done:
+		return pending.conn, pending.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *Client) completeOffer(pending *clientOffer, offerCtx context.Context) {
+	conn, err := c.offerNew(offerCtx)
+	pending.cancel(nil)
+
+	discardErr := err
+	shouldDiscard := false
+	c.connAccess.Lock()
+	if pending.discarded {
+		shouldDiscard = true
+		if pending.cause != nil {
+			discardErr = pending.cause
+		}
+		pending.err = discardErr
+	} else {
+		pending.conn = conn
+		pending.err = err
+		if err == nil {
+			c.conn = conn
+		}
+	}
+	if c.pending == pending {
+		c.pending = nil
+	}
+	close(pending.done)
+	c.connAccess.Unlock()
+
+	if shouldDiscard && conn != nil {
+		conn.closeWithError(discardErr)
+	}
 }
 
 func (c *Client) offerNew(ctx context.Context) (*clientQUICConnection, error) {
@@ -479,7 +542,6 @@ func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.Pack
 	if !c.udpDisabled {
 		go c.loopMessages(conn)
 	}
-	c.conn = conn
 	if c.hopInterval > 0 {
 		go c.hopLoop(conn)
 	}
@@ -529,12 +591,31 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 
 func (c *Client) CloseWithError(err error) error {
 	c.connAccess.Lock()
-	defer c.connAccess.Unlock()
 	conn := c.conn
+	c.conn = nil
+	pending := c.pending
+	if pending != nil {
+		pending.discarded = true
+		pending.cause = err
+	}
+	c.connAccess.Unlock()
+
+	if pending != nil {
+		pending.cancel(err)
+	}
 	if conn != nil {
 		conn.closeWithError(err)
 	}
 	return nil
+}
+
+type clientOffer struct {
+	done      chan struct{}
+	cancel    func(error)
+	conn      *clientQUICConnection
+	err       error
+	discarded bool
+	cause     error
 }
 
 type clientQUICConnection struct {
