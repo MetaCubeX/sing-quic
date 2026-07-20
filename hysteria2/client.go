@@ -542,6 +542,10 @@ func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.Pack
 	if !c.udpDisabled {
 		go c.loopMessages(conn)
 	}
+	go func() {
+		<-quicConn.Context().Done()
+		conn.closeWithError(context.Cause(quicConn.Context()))
+	}()
 	if c.hopInterval > 0 {
 		go c.hopLoop(conn)
 	}
