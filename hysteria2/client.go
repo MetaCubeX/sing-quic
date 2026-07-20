@@ -26,8 +26,6 @@ import (
 	"github.com/metacubex/tls"
 )
 
-const defaultHandshakeTimeout = 15 * time.Second
-
 type ClientOptions struct {
 	Context            context.Context
 	QuicDialer         qtls.QuicDialer
@@ -140,10 +138,6 @@ func NewClient(options ClientOptions) (*Client, error) {
 			return nil, E.Cause(err, "create control client")
 		}
 	}
-	if options.HandshakeTimeout <= 0 {
-		options.HandshakeTimeout = defaultHandshakeTimeout
-	}
-
 	client := &Client{
 		ctx:                options.Context,
 		quicDialer:         options.QuicDialer,
@@ -214,6 +208,19 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 		c.connAccess.Unlock()
 		return conn, nil
 	}
+
+	// short-circuit if we don't need an independent handshake timeout
+	// just follow the incoming context
+	if c.handshakeTimeout <= 0 {
+		defer c.connAccess.Unlock()
+		conn, err := c.offerNew(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.conn = conn
+		return conn, nil
+	}
+
 	pending := c.pending
 	if pending != nil {
 		c.connAccess.Unlock()
@@ -252,6 +259,8 @@ func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 }
 
 func (c *Client) completeOffer(pending *clientOffer, offerCtx context.Context) {
+	offerCtx, cancel := context.WithTimeout(offerCtx, c.handshakeTimeout) // c.handshakeTimeout must gather zero at here
+	defer cancel()
 	conn, err := c.offerNew(offerCtx)
 	pending.cancel(nil)
 
@@ -524,9 +533,7 @@ func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.Pack
 		Header: make(http.Header),
 	}
 	protocol.AuthRequestToHeader(request.Header, protocol.AuthRequest{Auth: c.password, Rx: c.receiveBPS})
-	authCtx, authCancel := context.WithTimeout(ctx, c.handshakeTimeout)
-	defer authCancel()
-	response, err := http3Transport.RoundTrip(request.WithContext(authCtx))
+	response, err := http3Transport.RoundTrip(request.WithContext(ctx))
 	if err != nil {
 		_ = quicConn.CloseWithError(0, "")
 		_ = packetConn.Close()
