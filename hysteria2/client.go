@@ -26,6 +26,8 @@ import (
 	"github.com/metacubex/tls"
 )
 
+const handshakeTimeout = 15 * time.Second
+
 type ClientOptions struct {
 	Context            context.Context
 	QuicDialer         qtls.QuicDialer
@@ -442,6 +444,8 @@ func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.Pack
 		Header: make(http.Header),
 	}
 	protocol.AuthRequestToHeader(request.Header, protocol.AuthRequest{Auth: c.password, Rx: c.receiveBPS})
+	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
 	response, err := http3Transport.RoundTrip(request.WithContext(ctx))
 	if err != nil {
 		_ = quicConn.CloseWithError(0, "")
