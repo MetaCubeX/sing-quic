@@ -113,8 +113,13 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if len(options.TLSConfig.NextProtos) == 0 {
 		options.TLSConfig.NextProtos = []string{http3.NextProtoH3}
 	}
-	if options.RealmOptions != nil && len(options.ServerPorts) > 0 {
-		return nil, E.New("realm and port hopping are mutually exclusive")
+	if options.RealmOptions != nil {
+		if len(options.ServerPorts) > 0 {
+			return nil, E.New("realm and port hopping are mutually exclusive")
+		}
+		if options.RealmOptions.IPVersion != 0 && options.RealmOptions.IPVersion != 4 && options.RealmOptions.IPVersion != 6 {
+			return nil, E.New("invalid IP version: ", options.RealmOptions.IPVersion)
+		}
 	}
 	if options.GeckoPassword != "" {
 		if options.GeckoMinPacketSize == 0 {
@@ -339,6 +344,12 @@ func (c *Client) realmOpenFamilies(ctx context.Context) ([]*realmFamilyConn, err
 	}{
 		{"v4", true, M.SocksaddrFrom(netip.IPv4Unspecified(), 0)},
 		{"v6", false, M.SocksaddrFrom(netip.IPv6Unspecified(), 0)},
+	}
+	switch c.realmOptions.IPVersion {
+	case 4:
+		specs = specs[:1]
+	case 6:
+		specs = specs[1:]
 	}
 	conns := make([]*realmFamilyConn, len(specs))
 	listenErrs := make([]error, len(specs))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metacubex/http"
+	"github.com/metacubex/sing/common"
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/sing/common/logger"
 
@@ -34,6 +35,7 @@ type Options struct {
 	STUNServers []string
 	Resolver    Resolver
 	Logger      logger.Logger
+	IPVersion   int
 }
 
 type Server struct {
@@ -72,6 +74,9 @@ func NewServer(options Options) (*Server, error) {
 	}
 	if options.Resolver == nil {
 		return nil, E.New("resolver is required")
+	}
+	if options.IPVersion != 0 && options.IPVersion != 4 && options.IPVersion != 6 {
+		return nil, E.New("invalid IP version: ", options.IPVersion)
 	}
 	return &Server{
 		options:       options,
@@ -215,6 +220,11 @@ func (s *Server) readEvents(ctx context.Context, stream *EventStream, streamDone
 			return
 		}
 		peerAddresses := event.Addresses
+		if s.options.IPVersion != 0 {
+			peerAddresses = common.Filter(peerAddresses, func(address netip.AddrPort) bool {
+				return address.Addr().Is4() == (s.options.IPVersion == 4)
+			})
+		}
 		metadata := event.PunchMetadata
 		go func() {
 			freshAddresses, stunErr := s.connectAddresses(ctx)
@@ -260,7 +270,7 @@ func (s *Server) resolvedSTUNServers(ctx context.Context) ([]netip.AddrPort, err
 	if s.stunServers != nil {
 		return s.stunServers, nil
 	}
-	resolved, err := ResolveSTUNServers(ctx, s.options.STUNServers, s.options.Resolver, true, true)
+	resolved, err := ResolveSTUNServers(ctx, s.options.STUNServers, s.options.Resolver, s.options.IPVersion != 6, s.options.IPVersion != 4)
 	if err != nil {
 		return nil, err
 	}
