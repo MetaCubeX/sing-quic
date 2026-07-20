@@ -77,7 +77,6 @@ type Client struct {
 	udpMTU             int
 
 	connAccess sync.Mutex
-	connErr    error
 	conn       *clientQUICConnection
 }
 
@@ -196,9 +195,6 @@ func (c *Client) hopLoop(conn *clientQUICConnection) {
 func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {
 	c.connAccess.Lock()
 	defer c.connAccess.Unlock()
-	if c.connErr != nil {
-		return nil, c.connErr
-	}
 	conn := c.conn
 	if conn != nil && conn.active() {
 		return conn, nil
@@ -531,14 +527,10 @@ func (c *Client) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 func (c *Client) CloseWithError(err error) error {
 	c.connAccess.Lock()
 	defer c.connAccess.Unlock()
-	if c.connErr != nil {
-		return nil
-	}
 	conn := c.conn
 	if conn != nil {
 		conn.closeWithError(err)
 	}
-	c.connErr = err
 	return nil
 }
 
