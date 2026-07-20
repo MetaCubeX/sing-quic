@@ -13,12 +13,12 @@ import (
 	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
+	qtls "github.com/metacubex/sing-quic"
 	hyCC "github.com/metacubex/sing-quic/hysteria2/congestion"
 	"github.com/metacubex/sing-quic/hysteria2/internal/protocol"
 	"github.com/metacubex/sing-quic/hysteria2/realm"
 	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/auth"
-	"github.com/metacubex/sing/common/baderror"
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/sing/common/logger"
 	M "github.com/metacubex/sing/common/metadata"
@@ -396,7 +396,7 @@ func (c *serverConn) HandshakeSuccess() error {
 
 func (c *serverConn) Read(p []byte) (n int, err error) {
 	n, err = c.Stream.Read(p)
-	return n, baderror.WrapQUIC(err)
+	return n, qtls.WrapError(err)
 }
 
 func (c *serverConn) Write(p []byte) (n int, err error) {
@@ -406,12 +406,12 @@ func (c *serverConn) Write(p []byte) (n int, err error) {
 		defer buffer.Release()
 		_, err = c.Stream.Write(buffer.Bytes())
 		if err != nil {
-			return 0, baderror.WrapQUIC(err)
+			return 0, qtls.WrapError(err)
 		}
 		return len(p), nil
 	}
 	n, err = c.Stream.Write(p)
-	return n, baderror.WrapQUIC(err)
+	return n, qtls.WrapError(err)
 }
 
 func (c *serverConn) LocalAddr() net.Addr {
