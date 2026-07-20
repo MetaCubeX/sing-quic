@@ -26,7 +26,7 @@ import (
 	"github.com/metacubex/tls"
 )
 
-const handshakeTimeout = 15 * time.Second
+const defaultHandshakeTimeout = 15 * time.Second
 
 type ClientOptions struct {
 	Context            context.Context
@@ -51,6 +51,7 @@ type ClientOptions struct {
 	RealmOptions       *realm.Options
 	SetBBRCongestion   SetCongestionControllerFunc
 	UdpMTU             int
+	HandshakeTimeout   time.Duration
 }
 
 type Client struct {
@@ -77,6 +78,7 @@ type Client struct {
 	controlClient      *realm.ControlClient
 	setBBRCongestion   SetCongestionControllerFunc
 	udpMTU             int
+	handshakeTimeout   time.Duration
 
 	connAccess sync.Mutex
 	conn       *clientQUICConnection
@@ -133,6 +135,10 @@ func NewClient(options ClientOptions) (*Client, error) {
 			return nil, E.Cause(err, "create control client")
 		}
 	}
+	if options.HandshakeTimeout <= 0 {
+		options.HandshakeTimeout = defaultHandshakeTimeout
+	}
+
 	client := &Client{
 		ctx:                options.Context,
 		quicDialer:         options.QuicDialer,
@@ -157,6 +163,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		controlClient:      controlClient,
 		setBBRCongestion:   options.SetBBRCongestion,
 		udpMTU:             options.UdpMTU,
+		handshakeTimeout:   options.HandshakeTimeout,
 	}
 	return client, nil
 }
@@ -506,9 +513,9 @@ func (c *Client) authenticateAndWrap(ctx context.Context, packetDialer qtls.Pack
 		Header: make(http.Header),
 	}
 	protocol.AuthRequestToHeader(request.Header, protocol.AuthRequest{Auth: c.password, Rx: c.receiveBPS})
-	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
-	defer cancel()
-	response, err := http3Transport.RoundTrip(request.WithContext(ctx))
+	authCtx, authCancel := context.WithTimeout(ctx, c.handshakeTimeout)
+	defer authCancel()
+	response, err := http3Transport.RoundTrip(request.WithContext(authCtx))
 	if err != nil {
 		_ = quicConn.CloseWithError(0, "")
 		_ = packetConn.Close()
