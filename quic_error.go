@@ -48,7 +48,7 @@ func (e *quicError) Is(target error) bool {
 		}
 		var h3Err *http3.Error
 		if errors.As(e.err, &h3Err) {
-			return h3Err.ErrorCode == http3.ErrCodeNoError
+			return h3Err.ErrorCode == http3.ErrCodeNoError || h3Err.ErrorCode == http3.ErrCodeRequestCanceled
 		}
 	case io.EOF:
 		var streamErr *quic.StreamError
