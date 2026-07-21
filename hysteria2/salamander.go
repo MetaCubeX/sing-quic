@@ -3,7 +3,6 @@ package hysteria2
 import (
 	"net"
 
-	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/buf"
 
 	"golang.org/x/crypto/blake2b"
@@ -35,9 +34,7 @@ func (s *SalamanderPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err err
 		return
 	}
 	key := blake2b.Sum256(append(s.password, p[:salamanderSaltLen]...))
-	for index, c := range p[salamanderSaltLen:n] {
-		p[index] = c ^ key[index%blake2b.Size256]
-	}
+	xorRepeating32(p[:n-salamanderSaltLen], p[salamanderSaltLen:n], &key)
 	return n - salamanderSaltLen, addr, nil
 }
 
@@ -46,9 +43,8 @@ func (s *SalamanderPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err erro
 	defer buffer.Release()
 	buffer.WriteRandom(salamanderSaltLen)
 	key := blake2b.Sum256(append(s.password, buffer.Bytes()...))
-	for index, c := range p {
-		common.Must(buffer.WriteByte(c ^ key[index%blake2b.Size256]))
-	}
+	body := buffer.Extend(len(p))
+	xorRepeating32(body, p, &key)
 	_, err = s.PacketConn.WriteTo(buffer.Bytes(), addr)
 	if err != nil {
 		return

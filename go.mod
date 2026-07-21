@@ -1,6 +1,6 @@
 module github.com/metacubex/sing-quic
 
-go 1.20
+go 1.27
 
 require (
 	github.com/metacubex/http v0.1.0
@@ -10,6 +10,7 @@ require (
 	github.com/metacubex/tls v0.1.0
 	golang.org/x/crypto v0.33.0
 	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
+	golang.org/x/sync v0.22.0
 )
 
 require (
