@@ -46,6 +46,8 @@ type ServiceOptions struct {
 	RealmOptions          *realm.Options
 	SetBBRCongestion      SetCongestionControllerFunc
 	UdpMTU                int
+
+	DisableMTUDiscovery *bool
 }
 
 type ServerHandler interface {
@@ -84,6 +86,9 @@ func NewService[U comparable](options ServiceOptions) (*Service[U], error) {
 	}
 	quicConfig.DisablePathManager = true // for port hopping
 	quicConfig.DisablePathMTUDiscovery = !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin")
+	if options.DisableMTUDiscovery != nil {
+		quicConfig.DisablePathMTUDiscovery = *options.DisableMTUDiscovery
+	}
 	quicConfig.EnableDatagrams = !options.UDPDisabled
 	if quicConfig.MaxIncomingStreams == 0 {
 		quicConfig.MaxIncomingStreams = 1 << 60
