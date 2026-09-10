@@ -51,6 +51,8 @@ type ClientOptions struct {
 	SetBBRCongestion   SetCongestionControllerFunc
 	UdpMTU             int
 	HandshakeTimeout   time.Duration
+
+	DisableMTUDiscovery *bool
 }
 
 type Client struct {
@@ -90,6 +92,9 @@ func NewClient(options ClientOptions) (*Client, error) {
 		quicConfig = options.QUICConfig
 	}
 	quicConfig.DisablePathMTUDiscovery = !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin")
+	if options.DisableMTUDiscovery != nil {
+		quicConfig.DisablePathMTUDiscovery = *options.DisableMTUDiscovery
+	}
 	quicConfig.EnableDatagrams = !options.UDPDisabled
 	if quicConfig.InitialStreamReceiveWindow == 0 {
 		quicConfig.InitialStreamReceiveWindow = DefaultStreamReceiveWindow
