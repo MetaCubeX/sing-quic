@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/metacubex/sing-quic/hysteria2/internal/stun"
@@ -17,6 +18,8 @@ func ResolveSTUNServers(ctx context.Context, servers []string, resolver Resolver
 		return nil, E.New("realm: resolver is required")
 	}
 	group, ctx := batch.New[[]netip.AddrPort](ctx)
+	// A server that fails to resolve is skipped as long as another one resolves.
+	resolveErrs := make([]error, len(servers))
 	for i, server := range servers {
 		i, server := i, server
 		group.Go(strconv.Itoa(i), func() ([]netip.AddrPort, error) {
@@ -42,7 +45,8 @@ func ResolveSTUNServers(ctx context.Context, servers []string, resolver Resolver
 			}
 			addresses, err := resolver(ctx, host, ipv4, ipv6)
 			if err != nil {
-				return nil, E.Cause(err, "resolve STUN server: ", server)
+				resolveErrs[i] = E.Cause(err, "resolve STUN server: ", server)
+				return nil, nil
 			}
 			entries := make([]netip.AddrPort, 0, len(addresses))
 			for _, address := range addresses {
@@ -60,6 +64,10 @@ func ResolveSTUNServers(ctx context.Context, servers []string, resolver Resolver
 		resolved = append(resolved, results[strconv.Itoa(i)].Value...)
 	}
 	if len(resolved) == 0 {
+		err := E.Errors(resolveErrs...)
+		if err != nil {
+			return nil, err
+		}
 		return nil, E.New("no STUN servers resolved")
 	}
 	return resolved, nil
@@ -95,7 +103,7 @@ func Discover(ctx context.Context, conn net.PacketConn, servers []netip.AddrPort
 				if E.IsTimeout(readErr) {
 					return addresses, nil
 				}
-				return nil, E.Cause(readErr, "read STUN response")
+				return addresses, E.Cause(readErr, "read STUN response")
 			}
 			message, parseErr := stun.Decode(buffer[:n])
 			if parseErr != nil {
@@ -196,7 +204,8 @@ func transmitSTUNRequests(conn net.PacketConn, requests []stunRequest, pending m
 
 // runDiscoveryAttempts retransmits the still-pending STUN requests up to three
 // times with growing per-attempt timeouts (RFC 5389-style backoff, capped near
-// 6.5s so initial discovery does not stall startup for ~64s).
+// 6.5s so initial discovery does not stall startup for ~64s). Once an attempt
+// has produced an address, servers that have not answered are not retried.
 func runDiscoveryAttempts(
 	ctx context.Context,
 	conn net.PacketConn,
@@ -237,18 +246,27 @@ func runDiscoveryAttempts(
 			}
 		}
 		if attemptErr != nil {
-			if E.IsCanceled(attemptErr) {
-				lastErr = attemptErr
-				break
-			}
-			return nil, attemptErr
+			lastErr = attemptErr
+			break
+		}
+		if len(result) > 0 {
+			break
 		}
 	}
 	if len(result) > 0 {
 		return result, nil
 	}
-	if lastErr != nil {
+	if E.IsCanceled(lastErr) {
 		return nil, lastErr
 	}
-	return nil, E.New("no STUN responses received")
+	silent := make([]string, 0, len(pending))
+	for _, request := range requests {
+		if _, isPending := pending[request.transactionID]; isPending {
+			silent = append(silent, request.server.String())
+		}
+	}
+	if len(silent) == 0 {
+		return nil, E.Errors(lastErr, E.New("no STUN responses received"))
+	}
+	return nil, E.Errors(lastErr, E.New("no STUN response from ", strings.Join(silent, ", ")))
 }
